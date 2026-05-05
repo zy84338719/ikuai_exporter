@@ -19,34 +19,26 @@ func main() {
 		addr        string
 		username    string
 		password    string
-		token       string
 		listenAddr  string
 		metricsPath string
 		namespace   string
 		insecure    bool
-		forceV3     bool
 	)
 
 	flag.StringVar(&addr, "router", "http://192.168.1.1", "iKuai router address (e.g. http://10.10.10.254)")
 	flag.StringVar(&username, "username", "admin", "Router username")
 	flag.StringVar(&password, "password", "admin", "Router password")
-	flag.StringVar(&token, "token", "", "Router token for v4 (optional)")
 	flag.StringVar(&listenAddr, "listen", ":9100", "Address to listen on for metrics")
 	flag.StringVar(&metricsPath, "path", "/metrics", "Metrics path")
 	flag.StringVar(&namespace, "namespace", "ikuai", "Prometheus metrics namespace")
 	flag.BoolVar(&insecure, "insecure", true, "Skip TLS certificate verification")
-	flag.BoolVar(&forceV3, "v3", false, "Force v3 protocol (skip auto-detection)")
 	flag.Parse()
 
+	// Both v3 and v4 routers authenticate via username/password through /Action/login.
+	// Version is auto-detected from the login response.
 	opts := []ikuaiapi.ClientOption{}
 	if insecure {
 		opts = append(opts, ikuaiapi.WithInsecureSkipVerify(true))
-	}
-	if forceV3 {
-		opts = append(opts, ikuaiapi.WithVersion(ikuaiapi.VersionV3))
-	}
-	if token != "" {
-		opts = append(opts, ikuaiapi.WithToken(token))
 	}
 
 	client := ikuaiapi.NewClient(addr, username, password, opts...)

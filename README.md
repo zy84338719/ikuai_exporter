@@ -2,7 +2,9 @@
 
 iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84338719/ikuai-api) 构建。
 
-支持 iKuai v3（用户名/密码）和 v4（用户名/密码 + Token）路由器。
+支持 iKuai **v3 和 v4** 路由器，两者均通过用户名/密码认证（版本自动检测）。
+
+> **关于 v4 "路由令牌"**：iKuai v4 提供了一套基于 Bearer Token 的 REST API（`/api/v4.0/`），该 API 不用于实时监控指标采集。本 Exporter 使用的是 `/Action/call` 监控接口，v3 和 v4 均通过用户名/密码登录获取 session，无需令牌。
 
 ## 支持的 Metrics
 
@@ -41,16 +43,13 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 ./ikuai_exporter \
   -router http://192.168.1.1 \
   -username admin \
-  -password admin \
-  -listen :9100
+  -password admin
 
-# v4 路由器（需要额外提供 Token）
+# v4 路由器（参数相同，版本自动检测）
 ./ikuai_exporter \
   -router http://10.10.30.254 \
   -username admin \
-  -password admin \
-  -token YOUR_ROUTER_TOKEN \
-  -listen :9100
+  -password admin
 ```
 
 访问 `http://localhost:9100/metrics` 查看指标。
@@ -62,12 +61,10 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 | `-router` | `http://192.168.1.1` | 路由器地址 |
 | `-username` | `admin` | 登录用户名 |
 | `-password` | `admin` | 登录密码 |
-| `-token` | `""` | v4 路由器令牌（可选） |
 | `-listen` | `:9100` | Exporter 监听地址 |
 | `-path` | `/metrics` | Metrics 路径 |
 | `-namespace` | `ikuai` | Prometheus 指标前缀 |
 | `-insecure` | `true` | 跳过 TLS 证书验证 |
-| `-v3` | `false` | 强制使用 v3 协议 |
 
 ### Docker
 
@@ -124,7 +121,7 @@ scrape_configs:
 # 构建
 make build
 
-# 运行（替换为实际地址和密码）
+# 运行
 ./bin/ikuai_exporter -router http://192.168.1.1 -username admin -password admin
 ```
 

@@ -11,14 +11,13 @@ services:
       - -router=http://192.168.1.1
       - -username=admin
       - -password=admin
-      # - -token=YOUR_V4_TOKEN   # v4 路由器填写
       - -listen=:9100
       - -namespace=ikuai
 
-  # 可选：同时监控多个路由器，启动多个实例
-  # ikuai-exporter-v4:
+  # 可选：同时监控多个路由器（v3/v4 参数相同）
+  # ikuai-exporter-2:
   #   image: ghcr.io/zy84338719/ikuai_exporter:latest
-  #   container_name: ikuai-exporter-v4
+  #   container_name: ikuai-exporter-2
   #   restart: unless-stopped
   #   ports:
   #     - "9101:9100"
@@ -26,5 +25,4 @@ services:
   #     - -router=http://10.10.30.254
   #     - -username=admin
   #     - -password=admin
-  #     - -token=YOUR_V4_TOKEN
   #     - -listen=:9100
