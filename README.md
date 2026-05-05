@@ -2,9 +2,14 @@
 
 iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84338719/ikuai-api) 构建。
 
-支持 iKuai **v3 和 v4** 路由器，两者均通过用户名/密码认证（版本自动检测）。
+支持两种认证模式：
 
-> **关于 v4 "路由令牌"**：iKuai v4 提供了一套基于 Bearer Token 的 REST API（`/api/v4.0/`），该 API 不用于实时监控指标采集。本 Exporter 使用的是 `/Action/call` 监控接口，v3 和 v4 均通过用户名/密码登录获取 session，无需令牌。
+| 模式 | 适用 | 所需凭证 |
+|------|------|---------|
+| **v4 REST**（推荐） | iKuai v4 路由器 | 个人 API 令牌（`-token`），无需用户名/密码 |
+| **Session** | iKuai v3 / v4 路由器 | 用户名 + 密码，版本自动检测 |
+
+v4 个人 API 令牌可在路由器管理界面的 **系统设置 → 个人令牌** 中获取。v4 REST API 运行在 **HTTPS (443)**，指定 `-router` 时使用 `http://` 或 `https://` 均可（自动转换）。
 
 ## 支持的 Metrics
 
@@ -39,15 +44,14 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 ### 二进制运行
 
 ```bash
-# v3 路由器
-./ikuai_exporter \
-  -router http://192.168.1.1 \
-  -username admin \
-  -password admin
-
-# v4 路由器（参数相同，版本自动检测）
+# v4 路由器 —— 个人 API 令牌模式（推荐，无需用户名/密码）
 ./ikuai_exporter \
   -router http://10.10.30.254 \
+  -token YjlmMjFjMzctZjlmYy00MjhiLThkZmUt
+
+# v3 / v4 路由器 —— 用户名/密码模式
+./ikuai_exporter \
+  -router http://192.168.1.1 \
   -username admin \
   -password admin
 ```
@@ -58,13 +62,14 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-router` | `http://192.168.1.1` | 路由器地址 |
-| `-username` | `admin` | 登录用户名 |
-| `-password` | `admin` | 登录密码 |
+| `-router` | `http://192.168.1.1` | 路由器地址（token 模式自动转 HTTPS） |
+| `-token` | `""` | 个人 API 令牌（v4 REST 模式，与 username/password 二选一） |
+| `-username` | `""` | 登录用户名（session 模式） |
+| `-password` | `""` | 登录密码（session 模式） |
 | `-listen` | `:9100` | Exporter 监听地址 |
 | `-path` | `/metrics` | Metrics 路径 |
 | `-namespace` | `ikuai` | Prometheus 指标前缀 |
-| `-insecure` | `true` | 跳过 TLS 证书验证 |
+| `-insecure` | `true` | 跳过 TLS 证书验证（session 模式） |
 
 ### Docker
 
