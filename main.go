@@ -8,7 +8,7 @@ import (
 	"os"
 
 	ikuaiapi "github.com/zy84338719/ikuai-api"
-	"github.com/zy84338719/ikuai-exporter/metrics"
+	"github.com/zy84338719/ikuai_exporter/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

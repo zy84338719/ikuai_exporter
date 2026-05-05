@@ -1,10 +1,10 @@
-module github.com/zy84338719/ikuai-exporter
+module github.com/zy84338719/ikuai_exporter
 
 go 1.24.0
 
 require (
 	github.com/prometheus/client_golang v1.23.2
-	github.com/zy84338719/ikuai-api v0.1.0
+	github.com/zy84338719/ikuai-api v0.2.0
 )
 
 require (

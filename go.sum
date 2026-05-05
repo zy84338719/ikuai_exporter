@@ -48,8 +48,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
-github.com/zy84338719/ikuai-api v0.1.0 h1:2tk3nBOErGbZEE2/nyxLV58DQFp4Vm9NzIiP0BS6qDA=
-github.com/zy84338719/ikuai-api v0.1.0/go.mod h1:QI/EdtDx8oPOLQyMEXev/VL2XOXsU3HqtpUuNMEYPe8=
+github.com/zy84338719/ikuai-api v0.2.0 h1:YMDqgmbfSUJiL6i/qtz1AhaTEsARdcjAaExEDEkaf48=
+github.com/zy84338719/ikuai-api v0.2.0/go.mod h1:QI/EdtDx8oPOLQyMEXev/VL2XOXsU3HqtpUuNMEYPe8=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=
