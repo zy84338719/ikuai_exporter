@@ -23,28 +23,47 @@ spec:
         - name: ikuai-exporter
           image: ghcr.io/zy84338719/ikuai_exporter:latest
           imagePullPolicy: Always
+
+          # ── v4 令牌模式（推荐）─────────────────────────────────────────────
           args:
             - -router=$(ROUTER_ADDR)
-            - -username=$(ROUTER_USERNAME)
-            - -password=$(ROUTER_PASSWORD)
+            - -token=$(ROUTER_TOKEN)
             - -listen=:9100
-            - -namespace=ikuai
           env:
             - name: ROUTER_ADDR
               valueFrom:
                 secretKeyRef:
                   name: ikuai-credentials
                   key: addr
-            - name: ROUTER_USERNAME
+            - name: ROUTER_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: ikuai-credentials
-                  key: username
-            - name: ROUTER_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ikuai-credentials
-                  key: password
+                  key: token
+
+          # ── 用户名/密码模式（v3 或 v4，替换上方 args/env）─────────────────
+          # args:
+          #   - -router=$(ROUTER_ADDR)
+          #   - -username=$(ROUTER_USERNAME)
+          #   - -password=$(ROUTER_PASSWORD)
+          #   - -listen=:9100
+          # env:
+          #   - name: ROUTER_ADDR
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: ikuai-credentials
+          #         key: addr
+          #   - name: ROUTER_USERNAME
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: ikuai-credentials
+          #         key: username
+          #   - name: ROUTER_PASSWORD
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: ikuai-credentials
+          #         key: password
+
           ports:
             - name: metrics
               containerPort: 9100

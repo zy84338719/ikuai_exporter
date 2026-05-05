@@ -1,28 +1,32 @@
 version: "3.8"
 
+# ikuai_exporter 部署示例
+# 每台路由器对应一个服务实例，监听不同端口。
+# 两种认证模式按需选择其一，另一种注释掉即可。
+
 services:
-  ikuai-exporter:
+
+  # ── v4 路由器：个人令牌模式（推荐）────────────────────────────────────────
+  ikuai-exporter-v4:
     image: ghcr.io/zy84338719/ikuai_exporter:latest
-    container_name: ikuai-exporter
+    container_name: ikuai-exporter-v4
     restart: unless-stopped
     ports:
       - "9100:9100"
     command:
-      - -router=http://192.168.1.1
-      - -username=admin
-      - -password=admin
+      - -router=http://10.10.30.254     # 路由器地址（自动转 HTTPS）
+      - -token=YOUR_API_TOKEN           # 个人令牌：系统设置 → 个人令牌
       - -listen=:9100
-      - -namespace=ikuai
 
-  # 可选：同时监控多个路由器（v3/v4 参数相同）
-  # ikuai-exporter-2:
+  # ── v3 / v4 路由器：用户名/密码模式 ──────────────────────────────────────
+  # ikuai-exporter-v3:
   #   image: ghcr.io/zy84338719/ikuai_exporter:latest
-  #   container_name: ikuai-exporter-2
+  #   container_name: ikuai-exporter-v3
   #   restart: unless-stopped
   #   ports:
   #     - "9101:9100"
   #   command:
-  #     - -router=http://10.10.30.254
+  #     - -router=http://192.168.1.1
   #     - -username=admin
   #     - -password=admin
   #     - -listen=:9100
