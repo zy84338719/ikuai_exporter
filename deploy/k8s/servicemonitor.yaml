@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ikuai-exporter
+  namespace: monitoring
+  labels:
+    app: ikuai-exporter
+spec:
+  selector:
+    matchLabels:
+      app: ikuai-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

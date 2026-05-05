@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  ikuai-exporter:
+    image: ghcr.io/zy84338719/ikuai_exporter:latest
+    container_name: ikuai-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    command:
+      - -router=http://192.168.1.1
+      - -username=admin
+      - -password=admin
+      # - -token=YOUR_V4_TOKEN   # v4 路由器填写
+      - -listen=:9100
+      - -namespace=ikuai
+
+  # 可选：同时监控多个路由器，启动多个实例
+  # ikuai-exporter-v4:
+  #   image: ghcr.io/zy84338719/ikuai_exporter:latest
+  #   container_name: ikuai-exporter-v4
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9101:9100"
+  #   command:
+  #     - -router=http://10.10.30.254
+  #     - -username=admin
+  #     - -password=admin
+  #     - -token=YOUR_V4_TOKEN
+  #     - -listen=:9100

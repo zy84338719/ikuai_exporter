@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ikuai-exporter
+  namespace: monitoring
+  labels:
+    app: ikuai-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ikuai-exporter
+  template:
+    metadata:
+      labels:
+        app: ikuai-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: ikuai-exporter
+          image: ghcr.io/zy84338719/ikuai_exporter:latest
+          imagePullPolicy: Always
+          args:
+            - -router=$(ROUTER_ADDR)
+            - -username=$(ROUTER_USERNAME)
+            - -password=$(ROUTER_PASSWORD)
+            - -listen=:9100
+            - -namespace=ikuai
+          env:
+            - name: ROUTER_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: ikuai-credentials
+                  key: addr
+            - name: ROUTER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: ikuai-credentials
+                  key: username
+            - name: ROUTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ikuai-credentials
+                  key: password
+          ports:
+            - name: metrics
+              containerPort: 9100
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9100
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ikuai-exporter
+  namespace: monitoring
+  labels:
+    app: ikuai-exporter
+spec:
+  selector:
+    app: ikuai-exporter
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100

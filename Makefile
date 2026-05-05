@@ -1,9 +1,14 @@
-MAIN_PATH="main.go"
+BINARY=bin/ikuai_exporter
 
-.PHNOY:
-clear:
+.PHONY: clean build run
+
+clean:
 	@rm -rf bin
+
 build:
 	@go mod tidy
-	@mkdir bin
-	@go build -o bin/main ${MAIN_PATH}
+	@mkdir -p bin
+	@go build -o $(BINARY) .
+
+run: build
+	@$(BINARY) -router http://10.10.10.254 -username admin -password admin -listen :9100
