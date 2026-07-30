@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vet:
+    name: Build & Vet
+    runs-on: ubuntu-latest
+    steps:
+      # go.mod has `replace github.com/zy84338719/ikuai-api => ../ikuai-api`.
+      # Check out ikuai-api as a sibling so the replace resolves the same way
+      # it does in local development.
+      - name: Checkout exporter
+        uses: actions/checkout@v4
+        with:
+          path: ikuai_exporter
+
+      - name: Checkout ikuai-api (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: zy84338719/ikuai-api
+          path: ikuai-api
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ikuai_exporter/go.mod
+          cache: true
+          cache-dependency-path: |
+            ikuai_exporter/go.sum
+            ikuai-api/go.sum
+
+      - name: Download deps
+        working-directory: ikuai_exporter
+        run: go mod download
+
+      - name: Build
+        working-directory: ikuai_exporter
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ikuai_exporter
+        run: go vet ./...
