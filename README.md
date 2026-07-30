@@ -1,17 +1,18 @@
 # ikuai_exporter
 
-iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84338719/ikuai-api) 构建，支持 v3 和 v4 路由器。
+iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84338719/ikuai-api) 构建，**仅支持 iKuai v4**（v4 REST API + 个人令牌）。
 
-## 认证模式
+> v3（`/Action/call` + 账号密码）已被 SDK 移除，本 exporter 不再支持。
 
-| 模式 | 适用版本 | 凭证 | 协议 |
-|------|---------|------|------|
-| **v4 REST**（推荐） | iKuai v4 | 个人 API 令牌（`-token`） | HTTPS 自动 |
-| **Session** | iKuai v3 / v4 | 用户名 + 密码 | HTTP |
+## 认证
 
-v4 个人 API 令牌：路由器管理界面 → **系统设置 → 个人令牌**。
+唯一认证方式：**v4 个人 API 令牌**。在路由器管理界面 → **系统设置 → 个人令牌** 生成后，用 `-token` 传入。
+
+所有指标都带 `router` 标签（值来自 `-router-label`，默认取 `-router` 的 host），便于单实例区分多台路由器。
 
 ## 支持的 Metrics
+
+所有指标均含 `router` 标签（下表省略）。
 
 | Metric | 类型 | 说明 |
 |--------|------|------|
@@ -25,6 +26,8 @@ v4 个人 API 令牌：路由器管理界面 → **系统设置 → 个人令牌
 | `ikuai_memory_cached_kibibytes` | Gauge | 缓存内存（KiB） |
 | `ikuai_memory_buffers_kibibytes` | Gauge | 缓冲内存（KiB） |
 | `ikuai_online_users_total` | Gauge | 在线用户总数 |
+| `ikuai_connections_total` | Gauge | 活跃连接总数 |
+| `ikuai_connections{protocol}` | Gauge | 按协议/状态的连接数（tcp/udp/icmp） |
 | `ikuai_interface_up{interface,ip_addr,comment}` | Gauge | 接口链路状态（1=正常） |
 | `ikuai_interface_upload_bytes_total{interface,ip_addr,comment}` | Counter | 接口累计上传字节数 |
 | `ikuai_interface_download_bytes_total{interface,ip_addr,comment}` | Counter | 接口累计下载字节数 |
@@ -43,14 +46,21 @@ v4 个人 API 令牌：路由器管理界面 → **系统设置 → 个人令牌
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-router` | `http://192.168.1.1` | 路由器地址（token 模式自动转 HTTPS） |
-| `-token` | `""` | 个人 API 令牌（v4 REST 模式，与 `-username/-password` 二选一） |
-| `-username` | `""` | 登录用户名（session 模式） |
-| `-password` | `""` | 登录密码（session 模式） |
+| `-router` | `https://192.168.1.1` | 路由器地址（自动转 HTTPS） |
+| `-token` | `""` | **必填**，个人 API 令牌 |
+| `-router-label` | `""` | 指标的 `router` 标签值（默认取 `-router` 的 host） |
 | `-listen` | `:9100` | Exporter 监听地址 |
 | `-path` | `/metrics` | Metrics 路径 |
 | `-namespace` | `ikuai` | Prometheus 指标前缀 |
-| `-insecure` | `true` | 跳过 TLS 证书验证（session 模式） |
+| `-insecure` | `true` | 跳过 TLS 证书验证 |
+
+### HTTP 端点
+
+| 路径 | 说明 |
+|------|------|
+| `/metrics` | Prometheus 指标 |
+| `/live`、`/healthz` | 存活探针（进程在跑即 200） |
+| `/ready` | 就绪探针（**真实探测路由器**，不可达返回 503，供 kubelet readiness 用） |
 
 ---
 
@@ -59,16 +69,10 @@ v4 个人 API 令牌：路由器管理界面 → **系统设置 → 个人令牌
 ### 二进制
 
 ```bash
-# v4 路由器 —— 令牌模式（推荐）
 ./ikuai_exporter \
   -router http://10.10.30.254 \
-  -token <your-api-token>
-
-# v3 / v4 路由器 —— 用户名/密码模式
-./ikuai_exporter \
-  -router http://192.168.1.1 \
-  -username admin \
-  -password admin
+  -token <your-api-token> \
+  -router-label office
 ```
 
 访问 `http://localhost:9100/metrics` 查看指标。
@@ -78,40 +82,31 @@ v4 个人 API 令牌：路由器管理界面 → **系统设置 → 个人令牌
 ### Docker
 
 ```bash
-# v4 令牌模式
 docker run -d \
   --name ikuai-exporter \
   -p 9100:9100 \
   ghcr.io/zy84338719/ikuai_exporter:latest \
   -router http://10.10.30.254 \
-  -token <your-api-token>
-
-# 用户名/密码模式
-docker run -d \
-  --name ikuai-exporter \
-  -p 9100:9100 \
-  ghcr.io/zy84338719/ikuai_exporter:latest \
-  -router http://192.168.1.1 \
-  -username admin \
-  -password admin
+  -token <your-api-token> \
+  -router-label office
 ```
 
 ---
 
 ### Docker Compose
 
-`deploy/docker-compose.yml` 提供了两个模板，按需取消注释：
+`deploy/docker-compose.yml` 提供了模板，按需取消注释：
 
 ```bash
 vi deploy/docker-compose.yml    # 填写路由器地址和凭证
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-**监控多台路由器**：每台路由器启动一个实例，监听不同端口：
+**监控多台路由器**：每台路由器启动一个实例，监听不同端口，各自用 `-router-label` 区分：
 
 ```bash
-# 实例 1：v4 令牌模式（端口 9100）
-# 实例 2：v3 密码模式（端口 9101）
+# 实例 1（端口 9100，router-label=office）
+# 实例 2（端口 9101，router-label=home）
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
@@ -147,8 +142,8 @@ scrape_configs:
   - job_name: ikuai
     static_configs:
       - targets:
-          - ikuai-exporter:9100   # v4 路由器
-          # - ikuai-exporter-v3:9101  # v3 路由器
+          - ikuai-exporter:9100   # office
+          - ikuai-exporter:9101   # home
 ```
 
 ---
@@ -159,11 +154,8 @@ scrape_configs:
 # 构建
 make build
 
-# 运行（v4 令牌模式）
-./bin/ikuai_exporter -router http://10.10.30.254 -token <token>
-
-# 运行（密码模式）
-./bin/ikuai_exporter -router http://192.168.1.1 -username admin -password admin
+# 运行
+./bin/ikuai_exporter -router http://10.10.30.254 -token <token> -router-label office
 ```
 
 ## 许可证

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
+	"time"
 
 	ikuaiapi "github.com/zy84338719/ikuai-api"
 	"github.com/zy84338719/ikuai_exporter/metrics"
@@ -20,6 +24,7 @@ func main() {
 		token       string
 		username    string
 		password    string
+		routerLabel string
 		listenAddr  string
 		metricsPath string
 		namespace   string
@@ -30,6 +35,7 @@ func main() {
 	flag.StringVar(&token, "token", "", "Personal API token for the v4 REST API (required; generate it in 系统设置 → 个人令牌)")
 	flag.StringVar(&username, "username", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
 	flag.StringVar(&password, "password", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
+	flag.StringVar(&routerLabel, "router-label", "", "Value of the 'router' label on every metric (defaults to the -router host)")
 	flag.StringVar(&listenAddr, "listen", ":9100", "Address to listen on for metrics")
 	flag.StringVar(&metricsPath, "path", "/metrics", "Metrics path")
 	flag.StringVar(&namespace, "namespace", "ikuai", "Prometheus metrics namespace")
@@ -55,8 +61,13 @@ func main() {
 		log.Fatalf("create ikuai client: %v", err)
 	}
 
-	collector := metrics.NewCollector(namespace, client)
-	log.Printf("v4 REST mode  addr=%s", httpsAddr)
+	// Default the router label to the host portion of the address.
+	if routerLabel == "" {
+		routerLabel = hostOf(httpsAddr)
+	}
+
+	collector := metrics.NewCollector(namespace, routerLabel, client)
+	log.Printf("v4 REST mode  addr=%s  router=%s", httpsAddr, routerLabel)
 
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collector)
@@ -70,9 +81,27 @@ func main() {
 <p><a href="%s">Metrics</a></p>
 </body></html>`, metricsPath)
 	})
+	// /live is a cheap liveness probe (process is up).
+	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	// /healthz kept as an alias of /live for backward compatibility.
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
+	})
+	// /ready is a readiness probe: it actually probes the router so kubelet
+	// can detect a dead/misconfigured target and stop sending scrape traffic.
+	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := collector.HealthCheck(ctx); err != nil {
+			http.Error(w, "router not ready: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	})
 
 	log.Printf("listening on %s%s", listenAddr, metricsPath)
@@ -80,4 +109,12 @@ func main() {
 		log.Printf("server error: %v", err)
 		os.Exit(1)
 	}
+}
+
+// hostOf extracts the host (no scheme, no port) for use as a default label.
+func hostOf(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(rawURL, "https://"), "http://")
 }

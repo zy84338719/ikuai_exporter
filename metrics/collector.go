@@ -91,12 +91,25 @@ type v4Client struct {
 	ConnectNum int    `json:"connect_num"`
 }
 
+// v4Connections mirrors /monitoring/connections summary fields.
+type v4Connections struct {
+	Total      int   `json:"total"`
+	TCP        int   `json:"tcp"`
+	UDP        int   `json:"udp"`
+	ICMP       int   `json:"icmp"`
+	TimeWait   int   `json:"time_wait"`
+	Established int  `json:"established"`
+}
+
 // Collector fetches metrics from the iKuai v4 REST API using a Bearer token.
+// Every series carries a "router" label identifying the target instance, so a
+// single Prometheus job scraping multiple exporters (or one exporter per
+// router) can distinguish them.
 type Collector struct {
-	mu          sync.Mutex
-	client      *ikuaiapi.Client
-	monitoring  *service.MonitoringService
-	apiBaseTime time.Time
+	mu         sync.Mutex
+	router     string // value of the "router" label
+	client     *ikuaiapi.Client
+	monitoring *service.MonitoringService
 
 	up      *prometheus.Desc
 	uptime  *prometheus.Desc
@@ -111,6 +124,9 @@ type Collector struct {
 	memBuffers *prometheus.Desc
 
 	onlineUsers *prometheus.Desc
+
+	connections      *prometheus.Desc
+	connectionsProto *prometheus.Desc
 
 	ifaceUp          *prometheus.Desc
 	ifaceUploadTotal *prometheus.Desc
@@ -129,29 +145,41 @@ type Collector struct {
 }
 
 // NewCollector builds a v4-only collector wired to the given SDK client.
-func NewCollector(ns string, client *ikuaiapi.Client) *Collector {
+// router is the value used for the "router" label on every series; pass an
+// empty string to omit the dimension (legacy single-instance behaviour).
+func NewCollector(ns, router string, client *ikuaiapi.Client) *Collector {
 	api := service.NewAPIClient(client)
+	// lbl builds a Desc whose label set always ends with "router".
 	lbl := func(name, help string, labels ...string) *prometheus.Desc {
-		return prometheus.NewDesc(prometheus.BuildFQName(ns, "", name), help, labels, nil)
+		all := append(append([]string{}, labels...), "router")
+		return prometheus.NewDesc(prometheus.BuildFQName(ns, "", name), help, all, nil)
+	}
+	// lblN builds a Desc with no variable labels except router.
+	lblN := func(name, help string) *prometheus.Desc {
+		return prometheus.NewDesc(prometheus.BuildFQName(ns, "", name), help, []string{"router"}, nil)
 	}
 
 	return &Collector{
+		router:     router,
 		client:     client,
 		monitoring: api.Monitoring(),
 
-		up:      lbl("up", "1 if the router is reachable, 0 otherwise"),
-		uptime:  lbl("uptime_seconds", "Router uptime in seconds"),
+		up:      lblN("up", "1 if the router is reachable, 0 otherwise"),
+		uptime:  lblN("uptime_seconds", "Router uptime in seconds"),
 		version: lbl("version_info", "Router version info (always 1)", "version", "arch", "ver_string", "model_name"),
 
 		cpuUsage: lbl("cpu_usage_ratio", "CPU core usage ratio (0–1)", "core"),
-		cpuTemp:  lbl("cpu_temperature_celsius", "CPU temperature in Celsius"),
+		cpuTemp:  lblN("cpu_temperature_celsius", "CPU temperature in Celsius"),
 
-		memTotal:   lbl("memory_total_kibibytes", "Total memory in KiB"),
-		memUsed:    lbl("memory_used_kibibytes", "Used memory in KiB"),
-		memCached:  lbl("memory_cached_kibibytes", "Cached memory in KiB"),
-		memBuffers: lbl("memory_buffers_kibibytes", "Buffers memory in KiB"),
+		memTotal:   lblN("memory_total_kibibytes", "Total memory in KiB"),
+		memUsed:    lblN("memory_used_kibibytes", "Used memory in KiB"),
+		memCached:  lblN("memory_cached_kibibytes", "Cached memory in KiB"),
+		memBuffers: lblN("memory_buffers_kibibytes", "Buffers memory in KiB"),
 
-		onlineUsers: lbl("online_users_total", "Number of online users"),
+		onlineUsers: lblN("online_users_total", "Number of online users"),
+
+		connections:      lblN("connections_total", "Total active connections"),
+		connectionsProto: lbl("connections", "Active connections by protocol/state", "protocol"),
 
 		ifaceUp:          lbl("interface_up", "1 if interface link check succeeded", "interface", "ip_addr", "comment"),
 		ifaceUploadTotal: lbl("interface_upload_bytes_total", "Total bytes uploaded via interface", "interface", "ip_addr", "comment"),
@@ -160,7 +188,7 @@ func NewCollector(ns string, client *ikuaiapi.Client) *Collector {
 		ifaceDlSpeed:     lbl("interface_download_speed_bytes", "Current download speed in bytes/s", "interface", "ip_addr", "comment"),
 		ifaceConns:       lbl("interface_connections", "Active connections via interface", "interface", "ip_addr", "comment"),
 
-		devicesTotal: lbl("devices_online_total", "Number of online LAN devices"),
+		devicesTotal: lblN("devices_online_total", "Number of online LAN devices"),
 		devInfo:      lbl("device_info", "LAN device info (always 1)", "mac", "hostname", "ip_addr", "interface", "comment"),
 		devUpTotal:   lbl("device_upload_bytes_total", "Total bytes uploaded by device", "mac", "ip_addr"),
 		devDlTotal:   lbl("device_download_bytes_total", "Total bytes downloaded by device", "mac", "ip_addr"),
@@ -181,6 +209,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.memCached
 	ch <- c.memBuffers
 	ch <- c.onlineUsers
+	ch <- c.connections
+	ch <- c.connectionsProto
 	ch <- c.ifaceUp
 	ch <- c.ifaceUploadTotal
 	ch <- c.ifaceDlTotal
@@ -196,6 +226,11 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.devConns
 }
 
+// r appends the router label value to a label-value slice.
+func (c *Collector) r(labels ...string) []string {
+	return append(labels, c.router)
+}
+
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -206,17 +241,16 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	raw, err := c.monitoring.GetMonitoringSystem(ctx)
 	if err != nil {
 		log.Printf("v4 /monitoring/system: %v", err)
-		ch <- gauge(c.up, 0)
+		ch <- gauge(c.up, 0, c.router)
 		return
 	}
-	ch <- gauge(c.up, 1)
+	ch <- gauge(c.up, 1, c.router)
 
 	var sys v4SystemData
 	if err := json.Unmarshal(raw, &sys); err != nil {
 		log.Printf("decode /monitoring/system: %v", err)
 		return
 	}
-	// Some firmaments nest the payload under a "sysinfo" key.
 	if sys.SysInfo != nil && sys.Uptime == 0 && sys.SysInfo.Uptime != 0 {
 		sys = *sys.SysInfo
 	}
@@ -243,34 +277,36 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.collectClients(ch, clients)
 		}
 	}
+
+	// Best-effort extra collectors — never fail the whole scrape on these.
+	c.collectConnections(ctx, ch)
 }
 
 func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
-	ch <- gauge(c.uptime, float64(s.Uptime))
+	ch <- gauge(c.uptime, float64(s.Uptime), c.router)
 
 	if s.VerInfo.VerString != "" {
-		ch <- gauge(c.version, 1,
-			s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.VerString, s.VerInfo.ModelName)
+		ch <- gauge(c.version, 1, c.r(s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.VerString, s.VerInfo.ModelName)...)
 	}
 
 	for i, cpu := range s.CPU {
 		if v, err := parsePct(cpu); err == nil {
-			ch <- gauge(c.cpuUsage, v, fmt.Sprintf("core%d", i))
+			ch <- gauge(c.cpuUsage, v, c.r(fmt.Sprintf("core%d", i))...)
 		}
 	}
 	if len(s.CPUTemp) > 0 {
-		ch <- gauge(c.cpuTemp, s.CPUTemp[0])
+		ch <- gauge(c.cpuTemp, s.CPUTemp[0], c.router)
 	}
 
 	if s.Memory.Total > 0 {
 		used := s.Memory.Total - s.Memory.Available
-		ch <- gauge(c.memTotal, float64(s.Memory.Total))
-		ch <- gauge(c.memUsed, float64(used))
-		ch <- gauge(c.memCached, float64(s.Memory.Cached))
-		ch <- gauge(c.memBuffers, float64(s.Memory.Buffers))
+		ch <- gauge(c.memTotal, float64(s.Memory.Total), c.router)
+		ch <- gauge(c.memUsed, float64(used), c.router)
+		ch <- gauge(c.memCached, float64(s.Memory.Cached), c.router)
+		ch <- gauge(c.memBuffers, float64(s.Memory.Buffers), c.router)
 	}
 
-	ch <- gauge(c.onlineUsers, float64(s.OnlineUser.Count))
+	ch <- gauge(c.onlineUsers, float64(s.OnlineUser.Count), c.router)
 }
 
 func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceCheck, streams []v4IFaceStream) {
@@ -290,26 +326,58 @@ func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceC
 		if chk, ok := checkMap[iface]; ok && chk.Result == "success" {
 			upVal = 1.0
 		}
-		ch <- gauge(c.ifaceUp, upVal, iface, ipAddr, comment)
-		ch <- counter(c.ifaceUploadTotal, float64(s.TotalUp), iface, ipAddr, comment)
-		ch <- counter(c.ifaceDlTotal, float64(s.TotalDown), iface, ipAddr, comment)
-		ch <- gauge(c.ifaceUploadSpeed, float64(s.Upload), iface, ipAddr, comment)
-		ch <- gauge(c.ifaceDlSpeed, float64(s.Download), iface, ipAddr, comment)
-		ch <- gauge(c.ifaceConns, float64(parseConnectNum(s.ConnectNum)), iface, ipAddr, comment)
+		ch <- gauge(c.ifaceUp, upVal, c.r(iface, ipAddr, comment)...)
+		ch <- counter(c.ifaceUploadTotal, float64(s.TotalUp), c.r(iface, ipAddr, comment)...)
+		ch <- counter(c.ifaceDlTotal, float64(s.TotalDown), c.r(iface, ipAddr, comment)...)
+		ch <- gauge(c.ifaceUploadSpeed, float64(s.Upload), c.r(iface, ipAddr, comment)...)
+		ch <- gauge(c.ifaceDlSpeed, float64(s.Download), c.r(iface, ipAddr, comment)...)
+		ch <- gauge(c.ifaceConns, float64(parseConnectNum(s.ConnectNum)), c.r(iface, ipAddr, comment)...)
 	}
 }
 
 func (c *Collector) collectClients(ch chan<- prometheus.Metric, devices []v4Client) {
-	ch <- gauge(c.devicesTotal, float64(len(devices)))
+	ch <- gauge(c.devicesTotal, float64(len(devices)), c.router)
 	for _, d := range devices {
 		mac, ip := d.Mac, d.IPAddr
-		ch <- gauge(c.devInfo, 1, mac, d.Hostname, ip, d.Interface, d.Comment)
-		ch <- counter(c.devUpTotal, float64(d.TotalUp), mac, ip)
-		ch <- counter(c.devDlTotal, float64(d.TotalDown), mac, ip)
-		ch <- gauge(c.devUpSpeed, float64(d.Upload), mac, ip)
-		ch <- gauge(c.devDlSpeed, float64(d.Download), mac, ip)
-		ch <- gauge(c.devConns, float64(d.ConnectNum), mac, ip)
+		ch <- gauge(c.devInfo, 1, c.r(mac, d.Hostname, ip, d.Interface, d.Comment)...)
+		ch <- counter(c.devUpTotal, float64(d.TotalUp), c.r(mac, ip)...)
+		ch <- counter(c.devDlTotal, float64(d.TotalDown), c.r(mac, ip)...)
+		ch <- gauge(c.devUpSpeed, float64(d.Upload), c.r(mac, ip)...)
+		ch <- gauge(c.devDlSpeed, float64(d.Download), c.r(mac, ip)...)
+		ch <- gauge(c.devConns, float64(d.ConnectNum), c.r(mac, ip)...)
 	}
+}
+
+// collectConnections pulls /monitoring/connections for connection-count metrics.
+// Best-effort: skipped silently if the endpoint is unavailable.
+func (c *Collector) collectConnections(ctx context.Context, ch chan<- prometheus.Metric) {
+	raw, err := c.monitoring.GetMonitoringConnections(ctx)
+	if err != nil {
+		return
+	}
+	var conn v4Connections
+	if err := json.Unmarshal(raw, &conn); err != nil {
+		return
+	}
+	if conn.Total > 0 {
+		ch <- gauge(c.connections, float64(conn.Total), c.router)
+	}
+	if conn.TCP > 0 {
+		ch <- gauge(c.connectionsProto, float64(conn.TCP), c.r("tcp")...)
+	}
+	if conn.UDP > 0 {
+		ch <- gauge(c.connectionsProto, float64(conn.UDP), c.r("udp")...)
+	}
+	if conn.ICMP > 0 {
+		ch <- gauge(c.connectionsProto, float64(conn.ICMP), c.r("icmp")...)
+	}
+}
+
+// HealthCheck performs a single probe against the router to verify the token
+// and connectivity. Used by the /ready endpoint.
+func (c *Collector) HealthCheck(ctx context.Context) error {
+	_, err := c.monitoring.GetMonitoringSystem(ctx)
+	return err
 }
 
 // ToHTTPS ensures the address uses https:// (v4 REST API requires HTTPS).
