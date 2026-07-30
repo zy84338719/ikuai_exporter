@@ -17,48 +17,46 @@ import (
 func main() {
 	var (
 		addr        string
+		token       string
 		username    string
 		password    string
-		token       string
 		listenAddr  string
 		metricsPath string
 		namespace   string
 		insecure    bool
 	)
 
-	flag.StringVar(&addr, "router", "http://192.168.1.1", "iKuai router address")
-	flag.StringVar(&username, "username", "", "Router username (required unless -token is set)")
-	flag.StringVar(&password, "password", "", "Router password (required unless -token is set)")
-	flag.StringVar(&token, "token", "", "Personal API token for v4 REST API (HTTPS only, no username/password needed)")
+	flag.StringVar(&addr, "router", "https://192.168.1.1", "iKuai router address (v4 REST API, HTTPS)")
+	flag.StringVar(&token, "token", "", "Personal API token for the v4 REST API (required; generate it in 系统设置 → 个人令牌)")
+	flag.StringVar(&username, "username", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
+	flag.StringVar(&password, "password", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
 	flag.StringVar(&listenAddr, "listen", ":9100", "Address to listen on for metrics")
 	flag.StringVar(&metricsPath, "path", "/metrics", "Metrics path")
 	flag.StringVar(&namespace, "namespace", "ikuai", "Prometheus metrics namespace")
 	flag.BoolVar(&insecure, "insecure", true, "Skip TLS certificate verification")
 	flag.Parse()
 
-	if token == "" && (username == "" || password == "") {
-		log.Fatal("provide either -token (v4 REST) or both -username and -password (v3/v4 session)")
+	if token == "" {
+		if username != "" || password != "" {
+			log.Fatal("the v4-only SDK dropped username/password login. Generate a personal API token in the router UI (系统设置 → 个人令牌) and pass it with -token.")
+		}
+		log.Fatal("missing -token: generate a personal API token in the router UI (系统设置 → 个人令牌) and pass it with -token.")
 	}
 
-	var collector prometheus.Collector
+	// The v4 REST API is served on HTTPS; auto-upgrade the scheme if the user
+	// passed an http:// address.
+	httpsAddr := metrics.ToHTTPS(addr)
 
-	if token != "" {
-		// v4 REST mode: token-only, no login needed.
-		// The v4 REST API runs on HTTPS; auto-upgrade the scheme if needed.
-		httpsAddr := metrics.ToHTTPS(addr)
-		v4client := ikuaiapi.NewV4RESTClient(httpsAddr, token,
-			ikuaiapi.WithV4RawMode(false),
-		)
-		collector = metrics.NewV4Collector(namespace, v4client)
-		log.Printf("v4 REST mode  addr=%s", httpsAddr)
-	} else {
-		// Session mode: username/password login via /Action/login.
-		// Works for both v3 and v4 routers (version auto-detected).
-		opts := []ikuaiapi.ClientOption{ikuaiapi.WithInsecureSkipVerify(insecure)}
-		client := ikuaiapi.NewClient(addr, username, password, opts...)
-		collector = metrics.NewCollector(namespace, client)
-		log.Printf("session mode  addr=%s  username=%s", addr, username)
+	client, err := ikuaiapi.NewClient(httpsAddr,
+		ikuaiapi.WithToken(token),
+		ikuaiapi.WithInsecureSkipVerify(insecure),
+	)
+	if err != nil {
+		log.Fatalf("create ikuai client: %v", err)
 	}
+
+	collector := metrics.NewCollector(namespace, client)
+	log.Printf("v4 REST mode  addr=%s", httpsAddr)
 
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collector)

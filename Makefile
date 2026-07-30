@@ -11,4 +11,4 @@ build:
 	@go build -o $(BINARY) .
 
 run: build
-	@$(BINARY) -router http://10.10.10.254 -username admin -password admin -listen :9100
+	@$(BINARY) -router https://10.10.10.254 -token $(IKUAI_TOKEN) -listen :9100

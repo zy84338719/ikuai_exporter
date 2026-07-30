@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -11,18 +12,91 @@ import (
 
 	ikuaiapi "github.com/zy84338719/ikuai-api"
 	"github.com/zy84338719/ikuai-api/service"
-	"github.com/zy84338719/ikuai-api/types"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const defaultTimeout = 15 * time.Second
 
+// v4 REST API response shapes.
+//
+// The v4-only SDK returns the inner data payload of each endpoint as a
+// json.RawMessage; the exporter decodes it into these locally-defined
+// structs (the SDK intentionally ships no typed models). Field names and
+// nesting match what the iKuai v4 firmware actually emits.
+
+type v4VerInfo struct {
+	Version   string `json:"version"`
+	Arch      string `json:"arch"`
+	VerString string `json:"ver_string"`
+	ModelName string `json:"model_name"`
+}
+
+type v4MemInfo struct {
+	Total     int64 `json:"total"`
+	Available int64 `json:"avail"`
+	Cached    int64 `json:"cached"`
+	Buffers   int64 `json:"buffers"`
+}
+
+type v4OnlineUser struct {
+	Count int `json:"count"`
+}
+
+// v4SystemData mirrors /monitoring/system's data object.
+type v4SystemData struct {
+	Uptime     int64         `json:"uptime"`
+	VerInfo    v4VerInfo     `json:"verinfo"`
+	CPU        []string      `json:"cpu"`
+	CPUTemp    []float64     `json:"cputemp"`
+	Memory     v4MemInfo     `json:"mem"`
+	OnlineUser v4OnlineUser  `json:"online_user"`
+	SysInfo    *v4SystemData `json:"sysinfo,omitempty"` // some firmwares nest under sysinfo
+}
+
+// v4IFaceCheck is one entry of /monitoring/interfaces-status[iface_check].
+type v4IFaceCheck struct {
+	Interface string `json:"interface"`
+	Result    string `json:"result"`
+}
+
+type v4IFaceStream struct {
+	Interface  string `json:"interface"`
+	IPAddr     string `json:"ip_addr"`
+	Comment    string `json:"comment"`
+	TotalUp    int64  `json:"total_up"`
+	TotalDown  int64  `json:"total_down"`
+	Upload     int64  `json:"upload"`
+	Download   int64  `json:"download"`
+	ConnectNum string `json:"connect_num"`
+}
+
+// v4InterfacesData mirrors /monitoring/interfaces-status data object.
+type v4InterfacesData struct {
+	IFaceCheck  []v4IFaceCheck  `json:"iface_check"`
+	IFaceStream []v4IFaceStream `json:"iface_stream"`
+}
+
+// v4Client mirrors one entry of /monitoring/clients-online.
+type v4Client struct {
+	Mac        string `json:"mac"`
+	Hostname   string `json:"hostname"`
+	IPAddr     string `json:"ip_addr"`
+	Interface  string `json:"interface"`
+	Comment    string `json:"comment"`
+	TotalUp    int64  `json:"total_up"`
+	TotalDown  int64  `json:"total_down"`
+	Upload     int64  `json:"upload"`
+	Download   int64  `json:"download"`
+	ConnectNum int    `json:"connect_num"`
+}
+
+// Collector fetches metrics from the iKuai v4 REST API using a Bearer token.
 type Collector struct {
-	mu      sync.Mutex
-	client  *ikuaiapi.Client
-	monitor service.MonitorService
-	system  service.SystemService
+	mu          sync.Mutex
+	client      *ikuaiapi.Client
+	monitoring  *service.MonitoringService
+	apiBaseTime time.Time
 
 	up      *prometheus.Desc
 	uptime  *prometheus.Desc
@@ -54,15 +128,16 @@ type Collector struct {
 	devConns     *prometheus.Desc
 }
 
+// NewCollector builds a v4-only collector wired to the given SDK client.
 func NewCollector(ns string, client *ikuaiapi.Client) *Collector {
+	api := service.NewAPIClient(client)
 	lbl := func(name, help string, labels ...string) *prometheus.Desc {
 		return prometheus.NewDesc(prometheus.BuildFQName(ns, "", name), help, labels, nil)
 	}
 
 	return &Collector{
-		client:  client,
-		monitor: service.NewMonitorService(client),
-		system:  service.NewSystemService(client),
+		client:     client,
+		monitoring: api.Monitoring(),
 
 		up:      lbl("up", "1 if the router is reachable, 0 otherwise"),
 		uptime:  lbl("uptime_seconds", "Router uptime in seconds"),
@@ -128,75 +203,82 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	if err := c.ensureLoggedIn(ctx); err != nil {
-		log.Printf("login failed: %v", err)
-		ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 0)
-		return
-	}
-
-	ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 1)
-
-	c.collectHomepage(ctx, ch)
-	c.collectInterfaces(ctx, ch)
-	c.collectLanDevices(ctx, ch)
-}
-
-func (c *Collector) ensureLoggedIn(ctx context.Context) error {
-	if c.client.IsLoggedIn() {
-		return nil
-	}
-	return c.client.Login(ctx)
-}
-
-func (c *Collector) collectHomepage(ctx context.Context, ch chan<- prometheus.Metric) {
-	stat, err := c.system.GetHomepage(ctx)
+	raw, err := c.monitoring.GetMonitoringSystem(ctx)
 	if err != nil {
-		log.Printf("homepage: %v", err)
+		log.Printf("v4 /monitoring/system: %v", err)
+		ch <- gauge(c.up, 0)
 		return
 	}
+	ch <- gauge(c.up, 1)
 
-	ch <- gauge(c.uptime, float64(stat.Uptime))
-
-	if stat.VerInfo.VerString != "" {
-		ch <- gauge(c.version, 1,
-			stat.VerInfo.Version,
-			stat.VerInfo.Arch,
-			stat.VerInfo.VerString,
-			stat.VerInfo.ModelName,
-		)
+	var sys v4SystemData
+	if err := json.Unmarshal(raw, &sys); err != nil {
+		log.Printf("decode /monitoring/system: %v", err)
+		return
 	}
+	// Some firmaments nest the payload under a "sysinfo" key.
+	if sys.SysInfo != nil && sys.Uptime == 0 && sys.SysInfo.Uptime != 0 {
+		sys = *sys.SysInfo
+	}
+	c.collectSystem(ch, &sys)
 
-	for i, s := range stat.CPU {
-		if v, err := parsePct(s); err == nil {
-			ch <- gauge(c.cpuUsage, v, fmt.Sprintf("core%d", i))
+	if raw, err := c.monitoring.GetMonitoringInterfacesStatus(ctx); err != nil {
+		log.Printf("v4 /monitoring/interfaces-status: %v", err)
+	} else {
+		var ifaces v4InterfacesData
+		if err := json.Unmarshal(raw, &ifaces); err != nil {
+			log.Printf("decode /monitoring/interfaces-status: %v", err)
+		} else {
+			c.collectIfaces(ch, ifaces.IFaceCheck, ifaces.IFaceStream)
 		}
 	}
 
-	if len(stat.CPUTemp) > 0 {
-		ch <- gauge(c.cpuTemp, float64(stat.CPUTemp[0]))
+	if raw, err := c.monitoring.GetMonitoringClientsOnline(ctx); err != nil {
+		log.Printf("v4 /monitoring/clients-online: %v", err)
+	} else {
+		var clients []v4Client
+		if err := json.Unmarshal(raw, &clients); err != nil {
+			log.Printf("decode /monitoring/clients-online: %v", err)
+		} else {
+			c.collectClients(ch, clients)
+		}
 	}
-
-	if stat.Memory.Total > 0 {
-		used := stat.Memory.Total - stat.Memory.Available
-		ch <- gauge(c.memTotal, float64(stat.Memory.Total))
-		ch <- gauge(c.memUsed, float64(used))
-		ch <- gauge(c.memCached, float64(stat.Memory.Cached))
-		ch <- gauge(c.memBuffers, float64(stat.Memory.Buffers))
-	}
-
-	ch <- gauge(c.onlineUsers, float64(stat.OnlineUser.Count))
 }
 
-func (c *Collector) collectInterfaces(ctx context.Context, ch chan<- prometheus.Metric) {
-	ifaces, err := c.monitor.GetInterfaces(ctx)
-	if err != nil {
-		log.Printf("interfaces: %v", err)
-		return
+func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
+	ch <- gauge(c.uptime, float64(s.Uptime))
+
+	if s.VerInfo.VerString != "" {
+		ch <- gauge(c.version, 1,
+			s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.VerString, s.VerInfo.ModelName)
 	}
 
-	checkMap := buildCheckMap(ifaces.GetIFaceCheck())
+	for i, cpu := range s.CPU {
+		if v, err := parsePct(cpu); err == nil {
+			ch <- gauge(c.cpuUsage, v, fmt.Sprintf("core%d", i))
+		}
+	}
+	if len(s.CPUTemp) > 0 {
+		ch <- gauge(c.cpuTemp, s.CPUTemp[0])
+	}
 
-	for _, s := range ifaces.GetIFaceStream() {
+	if s.Memory.Total > 0 {
+		used := s.Memory.Total - s.Memory.Available
+		ch <- gauge(c.memTotal, float64(s.Memory.Total))
+		ch <- gauge(c.memUsed, float64(used))
+		ch <- gauge(c.memCached, float64(s.Memory.Cached))
+		ch <- gauge(c.memBuffers, float64(s.Memory.Buffers))
+	}
+
+	ch <- gauge(c.onlineUsers, float64(s.OnlineUser.Count))
+}
+
+func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceCheck, streams []v4IFaceStream) {
+	checkMap := make(map[string]v4IFaceCheck, len(checks))
+	for _, ck := range checks {
+		checkMap[ck.Interface] = ck
+	}
+	for _, s := range streams {
 		iface := s.Interface
 		ipAddr := s.IPAddr
 		comment := s.Comment
@@ -209,51 +291,37 @@ func (c *Collector) collectInterfaces(ctx context.Context, ch chan<- prometheus.
 			upVal = 1.0
 		}
 		ch <- gauge(c.ifaceUp, upVal, iface, ipAddr, comment)
-
-		connNum := parseConnectNum(s.ConnectNum)
 		ch <- counter(c.ifaceUploadTotal, float64(s.TotalUp), iface, ipAddr, comment)
 		ch <- counter(c.ifaceDlTotal, float64(s.TotalDown), iface, ipAddr, comment)
 		ch <- gauge(c.ifaceUploadSpeed, float64(s.Upload), iface, ipAddr, comment)
 		ch <- gauge(c.ifaceDlSpeed, float64(s.Download), iface, ipAddr, comment)
-		ch <- gauge(c.ifaceConns, float64(connNum), iface, ipAddr, comment)
+		ch <- gauge(c.ifaceConns, float64(parseConnectNum(s.ConnectNum)), iface, ipAddr, comment)
 	}
 }
 
-func (c *Collector) collectLanDevices(ctx context.Context, ch chan<- prometheus.Metric) {
-	devices, err := c.monitor.GetLanIP(ctx)
-	if err != nil {
-		log.Printf("lan devices: %v", err)
-		return
-	}
-
+func (c *Collector) collectClients(ch chan<- prometheus.Metric, devices []v4Client) {
 	ch <- gauge(c.devicesTotal, float64(len(devices)))
-
 	for _, d := range devices {
-		collectDevice(ch, c, d)
+		mac, ip := d.Mac, d.IPAddr
+		ch <- gauge(c.devInfo, 1, mac, d.Hostname, ip, d.Interface, d.Comment)
+		ch <- counter(c.devUpTotal, float64(d.TotalUp), mac, ip)
+		ch <- counter(c.devDlTotal, float64(d.TotalDown), mac, ip)
+		ch <- gauge(c.devUpSpeed, float64(d.Upload), mac, ip)
+		ch <- gauge(c.devDlSpeed, float64(d.Download), mac, ip)
+		ch <- gauge(c.devConns, float64(d.ConnectNum), mac, ip)
 	}
 }
 
-func collectDevice(ch chan<- prometheus.Metric, c *Collector, d types.MonitorLanIPItem) {
-	mac := d.Mac
-	ip := d.IPAddr
-	hostname := d.Hostname
-	iface := d.Interface
-	comment := d.Comment
-
-	ch <- gauge(c.devInfo, 1, mac, hostname, ip, iface, comment)
-	ch <- counter(c.devUpTotal, float64(d.TotalUp), mac, ip)
-	ch <- counter(c.devDlTotal, float64(d.TotalDown), mac, ip)
-	ch <- gauge(c.devUpSpeed, float64(d.Upload), mac, ip)
-	ch <- gauge(c.devDlSpeed, float64(d.Download), mac, ip)
-	ch <- gauge(c.devConns, float64(d.ConnectNum), mac, ip)
-}
-
-func buildCheckMap(checks []types.IFaceCheck) map[string]types.IFaceCheck {
-	m := make(map[string]types.IFaceCheck, len(checks))
-	for _, c := range checks {
-		m[c.Interface] = c
+// ToHTTPS ensures the address uses https:// (v4 REST API requires HTTPS).
+func ToHTTPS(addr string) string {
+	addr = strings.TrimRight(addr, "/")
+	if strings.HasPrefix(addr, "http://") {
+		return "https://" + addr[7:]
 	}
-	return m
+	if !strings.HasPrefix(addr, "https://") {
+		return "https://" + addr
+	}
+	return addr
 }
 
 func gauge(desc *prometheus.Desc, val float64, labels ...string) prometheus.Metric {
