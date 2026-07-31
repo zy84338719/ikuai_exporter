@@ -41,29 +41,6 @@ spec:
                   name: ikuai-credentials
                   key: token
 
-          # ── 用户名/密码模式（v3 或 v4，替换上方 args/env）─────────────────
-          # args:
-          #   - -router=$(ROUTER_ADDR)
-          #   - -username=$(ROUTER_USERNAME)
-          #   - -password=$(ROUTER_PASSWORD)
-          #   - -listen=:9100
-          # env:
-          #   - name: ROUTER_ADDR
-          #     valueFrom:
-          #       secretKeyRef:
-          #         name: ikuai-credentials
-          #         key: addr
-          #   - name: ROUTER_USERNAME
-          #     valueFrom:
-          #       secretKeyRef:
-          #         name: ikuai-credentials
-          #         key: username
-          #   - name: ROUTER_PASSWORD
-          #     valueFrom:
-          #       secretKeyRef:
-          #         name: ikuai-credentials
-          #         key: password
-
           ports:
             - name: metrics
               containerPort: 9100
@@ -75,10 +52,13 @@ spec:
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /ready
               port: 9100
             initialDelaySeconds: 5
             periodSeconds: 10
+            # /ready probes the router; allow a few failures before marking
+            # the pod not ready so a flapping router doesn't thrash it.
+            failureThreshold: 3
           resources:
             requests:
               cpu: 10m
