@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## v1.0.1 — 2026-08-01
+
+Field-mapping fixes verified against a live iKuai 4.0.303 router.
+
+### Fixed
+- `/monitoring/system`: read memory from the `memory` key (was `mem`); the
+  payload nests under `sysinfo`, already unwrapped.
+- `/monitoring/clients-online`: peel the inner `{"data":[...]}` wrapper (was
+  unmarshalling the wrapper object as a bare array, yielding zero devices).
+- `/monitoring/connections` is a timeseries, not a summary — dropped.
+  Connection counters (`ikuai_connections_total`, `ikuai_connections{protocol}`)
+  now come from `sysinfo.stream` (a real-time point value).
+
+Verified live: CPU (9 cores), memory, connections (tcp/udp/icmp), 11 online
+devices, wan/lan interfaces with traffic.
+
+## v1.0.0 — 2026-08-01
 
 ### Changed
 - **v4-only**: dropped the v3 username/password (`/Action/login`) code path.
