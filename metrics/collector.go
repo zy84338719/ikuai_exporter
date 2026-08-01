@@ -43,15 +43,29 @@ type v4OnlineUser struct {
 	Count int `json:"count"`
 }
 
+// v4SystemStream mirrors sysinfo.stream on /monitoring/system — real-time
+// connection counters and totals (a point value, unlike the /connections
+// timeseries endpoint).
+type v4SystemStream struct {
+	ConnectNum int   `json:"connect_num"`
+	TCP        int   `json:"tcp_connect_num"`
+	UDP        int   `json:"udp_connect_num"`
+	ICMP       int   `json:"icmp_connect_num"`
+}
+
 // v4SystemData mirrors /monitoring/system's data object.
+// The router returns {"results":{"sysinfo":{...}}} — after the SDK unwraps the
+// envelope the collector sees {"sysinfo":{...}}, so the real fields live one
+// level down inside SysInfo.
 type v4SystemData struct {
 	Uptime     int64         `json:"uptime"`
 	VerInfo    v4VerInfo     `json:"verinfo"`
 	CPU        []string      `json:"cpu"`
 	CPUTemp    []float64     `json:"cputemp"`
-	Memory     v4MemInfo     `json:"mem"`
+	Memory     v4MemInfo     `json:"memory"`
 	OnlineUser v4OnlineUser  `json:"online_user"`
-	SysInfo    *v4SystemData `json:"sysinfo,omitempty"` // some firmwares nest under sysinfo
+	Stream     v4SystemStream `json:"stream"`
+	SysInfo    *v4SystemData `json:"sysinfo,omitempty"` // v4 nests the payload here
 }
 
 // v4IFaceCheck is one entry of /monitoring/interfaces-status[iface_check].
@@ -89,16 +103,6 @@ type v4Client struct {
 	Upload     int64  `json:"upload"`
 	Download   int64  `json:"download"`
 	ConnectNum int    `json:"connect_num"`
-}
-
-// v4Connections mirrors /monitoring/connections summary fields.
-type v4Connections struct {
-	Total      int   `json:"total"`
-	TCP        int   `json:"tcp"`
-	UDP        int   `json:"udp"`
-	ICMP       int   `json:"icmp"`
-	TimeWait   int   `json:"time_wait"`
-	Established int  `json:"established"`
 }
 
 // Collector fetches metrics from the iKuai v4 REST API using a Bearer token.
@@ -270,16 +274,23 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if raw, err := c.monitoring.GetMonitoringClientsOnline(ctx); err != nil {
 		log.Printf("v4 /monitoring/clients-online: %v", err)
 	} else {
-		var clients []v4Client
-		if err := json.Unmarshal(raw, &clients); err != nil {
-			log.Printf("decode /monitoring/clients-online: %v", err)
+		// The router returns {"data":[...]}; the SDK unwraps the envelope so we
+		// still have to peel the inner "data" key off.
+		var wrap struct {
+			Data []v4Client `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &wrap); err != nil {
+			// Some firmware may return a bare array.
+			var arr []v4Client
+			if jerr := json.Unmarshal(raw, &arr); jerr == nil {
+				c.collectClients(ch, arr)
+			} else {
+				log.Printf("decode /monitoring/clients-online: %v", err)
+			}
 		} else {
-			c.collectClients(ch, clients)
+			c.collectClients(ch, wrap.Data)
 		}
 	}
-
-	// Best-effort extra collectors — never fail the whole scrape on these.
-	c.collectConnections(ctx, ch)
 }
 
 func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
@@ -307,6 +318,21 @@ func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) 
 	}
 
 	ch <- gauge(c.onlineUsers, float64(s.OnlineUser.Count), c.router)
+
+	// Connection counters from sysinfo.stream (point value, not the timeseries
+	// /monitoring/connections endpoint).
+	if s.Stream.ConnectNum > 0 {
+		ch <- gauge(c.connections, float64(s.Stream.ConnectNum), c.router)
+		if s.Stream.TCP > 0 {
+			ch <- gauge(c.connectionsProto, float64(s.Stream.TCP), c.r("tcp")...)
+		}
+		if s.Stream.UDP > 0 {
+			ch <- gauge(c.connectionsProto, float64(s.Stream.UDP), c.r("udp")...)
+		}
+		if s.Stream.ICMP > 0 {
+			ch <- gauge(c.connectionsProto, float64(s.Stream.ICMP), c.r("icmp")...)
+		}
+	}
 }
 
 func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceCheck, streams []v4IFaceStream) {
@@ -345,31 +371,6 @@ func (c *Collector) collectClients(ch chan<- prometheus.Metric, devices []v4Clie
 		ch <- gauge(c.devUpSpeed, float64(d.Upload), c.r(mac, ip)...)
 		ch <- gauge(c.devDlSpeed, float64(d.Download), c.r(mac, ip)...)
 		ch <- gauge(c.devConns, float64(d.ConnectNum), c.r(mac, ip)...)
-	}
-}
-
-// collectConnections pulls /monitoring/connections for connection-count metrics.
-// Best-effort: skipped silently if the endpoint is unavailable.
-func (c *Collector) collectConnections(ctx context.Context, ch chan<- prometheus.Metric) {
-	raw, err := c.monitoring.GetMonitoringConnections(ctx)
-	if err != nil {
-		return
-	}
-	var conn v4Connections
-	if err := json.Unmarshal(raw, &conn); err != nil {
-		return
-	}
-	if conn.Total > 0 {
-		ch <- gauge(c.connections, float64(conn.Total), c.router)
-	}
-	if conn.TCP > 0 {
-		ch <- gauge(c.connectionsProto, float64(conn.TCP), c.r("tcp")...)
-	}
-	if conn.UDP > 0 {
-		ch <- gauge(c.connectionsProto, float64(conn.UDP), c.r("udp")...)
-	}
-	if conn.ICMP > 0 {
-		ch <- gauge(c.connectionsProto, float64(conn.ICMP), c.r("icmp")...)
 	}
 }
 

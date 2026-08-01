@@ -50,15 +50,13 @@ func TestCollectSystem(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/monitoring/system"):
-			_, _ = w.Write([]byte(`{"code":0,"data":{"uptime":3600,"cpu":["12.5","7.0"],"cputemp":[42.6],"mem":{"total":1000000,"avail":400000,"cached":50000,"buffers":30000},"online_user":{"count":3},"verinfo":{"version":"4.0.1","arch":"x86","ver_string":"4.0.1 x64","model_name":"X10"}}}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"sysinfo":{"uptime":3600,"cpu":["12.5%","7.0%"],"cputemp":[42.6],"memory":{"total":1000000,"avail":400000,"cached":50000,"buffers":30000},"online_user":{"count":3},"stream":{"connect_num":128,"tcp_connect_num":80,"udp_connect_num":40,"icmp_connect_num":2},"verinfo":{"version":"4.0.1","arch":"x86","ver_string":"4.0.1 x64","model_name":"X10"}}}}`))
 		case strings.HasSuffix(r.URL.Path, "/monitoring/interfaces-status"):
-			_, _ = w.Write([]byte(`{"code":0,"data":{"iface_check":[{"interface":"wan1","result":"success"}],"iface_stream":[{"interface":"wan1","ip_addr":"1.2.3.4","comment":"","total_up":1000,"total_down":2000,"upload":50,"download":80,"connect_num":"5"}]}}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"iface_check":[{"interface":"wan1","result":"success"}],"iface_stream":[{"interface":"wan1","ip_addr":"1.2.3.4","comment":"","total_up":1000,"total_down":2000,"upload":50,"download":80,"connect_num":"5"}]}}`))
 		case strings.HasSuffix(r.URL.Path, "/monitoring/clients-online"):
-			_, _ = w.Write([]byte(`{"code":0,"data":[{"mac":"aa:bb:cc:dd:ee:ff","hostname":"phone","ip_addr":"192.168.1.10","interface":"lan1","comment":"","total_up":100,"total_down":200,"upload":10,"download":20,"connect_num":2}]}`))
-		case strings.HasSuffix(r.URL.Path, "/monitoring/connections"):
-			_, _ = w.Write([]byte(`{"code":0,"data":{"total":128,"tcp":80,"udp":40,"icmp":2}}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"data":[{"mac":"aa:bb:cc:dd:ee:ff","hostname":"phone","ip_addr":"192.168.1.10","interface":"lan1","comment":"","total_up":100,"total_down":200,"upload":10,"download":20,"connect_num":2}]}}`))
 		default:
-			_, _ = w.Write([]byte(`{"code":0,"data":null}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"data":null}}`))
 		}
 	}))
 	defer srv.Close()
