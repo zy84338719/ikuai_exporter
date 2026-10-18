@@ -1,0 +1,19 @@
+# Keep the build context to what the image actually needs.
+# The image resolves every dependency from the module proxy at the version
+# go.mod pins, so a local go.work (which points at ../ikuai-api) must not be
+# copied in — that path does not exist in the image.
+go.work
+go.work.sum
+
+# Local build output and editor state.
+bin/
+.git/
+.github/
+.idea/
+*.iml
+
+# Docs and deploy manifests are not needed to compile the binary.
+*.md
+deploy/
+Dockerfile
+.dockerignore

@@ -1,3 +1,8 @@
 /.idea/
 ikuai_exporter.iml
 bin/
+
+# 本地 go workspace：仅用于把 ../ikuai-api 接进来联调，不应入库。
+# 依赖版本由 go.mod 锁定，CI 与镜像构建不使用工作区。
+go.work
+go.work.sum

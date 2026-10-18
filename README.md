@@ -52,6 +52,7 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 | `-listen` | `:9100` | Exporter 监听地址 |
 | `-path` | `/metrics` | Metrics 路径 |
 | `-namespace` | `ikuai` | Prometheus 指标前缀 |
+| `-shutdown-timeout` | `15s` | SIGINT/SIGTERM 时等待在途 scrape 的优雅关停窗口 |
 | `-insecure` | `true` | 跳过 TLS 证书验证 |
 
 ### HTTP 端点
@@ -59,8 +60,12 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 | 路径 | 说明 |
 |------|------|
 | `/metrics` | Prometheus 指标 |
-| `/live`、`/healthz` | 存活探针（进程在跑即 200） |
+| `/live`、`/healthz` | 存活探针（进程在跑即 200，不触碰路由器） |
 | `/ready` | 就绪探针（**真实探测路由器**，不可达返回 503，供 kubelet readiness 用） |
+
+进程收到 `SIGINT`/`SIGTERM` 时按 `bootstrap` 生命周期编排优雅关停：先停止对外服务并等待在途
+scrape 结束，再关闭 ikuai-api 客户端，最后退出。Kubernetes 侧已配置
+`terminationGracePeriodSeconds: 30`。
 
 ---
 
@@ -154,9 +159,45 @@ scrape_configs:
 # 构建
 make build
 
+# 本地门禁（gofmt + vet + race 测试，与 CI 一致）
+make check
+
 # 运行
 ./bin/ikuai_exporter -router http://10.10.30.254 -token <token> -router-label office
 ```
+
+### 本地联调 SDK
+
+`go.mod` 现在锁定 ikuai-api 的**已发布版本**，且不再带 `replace`——本地、CI 和镜像构建看到的依赖因此一致（此前 `replace ../ikuai-api` 会让本地和 CI 构建到未发布的 `main`，而 Docker 构建却从 proxy 取已发布版）。
+
+仓库根目录有一个**不入库**的 `go.work`（见 `.gitignore`），它把同级的 `../ikuai-api` 接进工作区：改 SDK 后 exporter 立即生效，而 `go.mod` 依旧锁定发布版。
+
+```bash
+# 确认当前解析到哪个版本
+go list -m github.com/zy84338719/ikuai-api   # 有 go.work 时显示本地路径
+
+# 临时验证「纯发布版」行为（等价于 CI / 镜像构建）
+GOWORK=off go test ./...
+```
+
+若 `go.work` 丢失，重建即可：
+
+```bash
+printf 'go 1.24.0\n\nuse (\n\t.\n\t../ikuai-api\n)\n' > go.work
+```
+
+### 工程规范
+
+本项目遵循 [oekit](https://oekit.github.io) 的工程契约：
+
+- **日志**统一走 `logx` 门面（kv 结构化风格），`main` 中 `logx.UseSlog()` 选择 slog JSON 后端。
+  内嵌的 ikuai-api 通过 `logx.Delegating` 懒解析，会自动跟随同一后端。
+- **错误**统一用 `oekit/pkg/errors` 包装，保留错误链以便 `AsBizError` 提取 iKuai 业务码。
+- **生命周期**由 `oekit/bootstrap` 编排（信号监听、资源逆序关闭、优雅关停）。
+- **并发**使用 `oekit/concurrency/async` 的 GoSafe 系列，不写裸 `go func`。
+
+> 依赖版本一律由 `go.mod` 锁定为已发布的 ikuai-api；本地联调用不入库的 `go.work`，
+> 不再通过 `replace` 污染模块声明。
 
 ## 许可证
 

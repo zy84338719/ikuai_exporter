@@ -7,45 +7,57 @@ on:
     branches: [main, master]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}.${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-vet:
-    name: Build & Vet
+  check:
+    name: Check
     runs-on: ubuntu-latest
+    env:
+      # go.work is gitignored (it exists only to link ../ikuai-api for local
+      # development), so CI resolves ikuai-api from go.mod's pinned published
+      # version — the same thing the Docker image builds. Pinning it explicitly
+      # keeps that true even if someone commits a stray workspace file.
+      GOWORK: "off"
     steps:
-      # go.mod has `replace github.com/zy84338719/ikuai-api => ../ikuai-api`.
-      # Check out ikuai-api as a sibling so the replace resolves the same way
-      # it does in local development.
-      - name: Checkout exporter
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: ikuai_exporter
-
-      - name: Checkout ikuai-api (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: zy84338719/ikuai-api
-          path: ikuai-api
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: ikuai_exporter/go.mod
+          go-version-file: go.mod
           cache: true
-          cache-dependency-path: |
-            ikuai_exporter/go.sum
-            ikuai-api/go.sum
 
       - name: Download deps
-        working-directory: ikuai_exporter
         run: go mod download
 
-      - name: Build
-        working-directory: ikuai_exporter
-        run: go build ./...
+      # Same gate as `make check`: gofmt, vet, then the race-enabled tests.
+      # The paging walk in metrics/collector.go is the one place a regression
+      # silently under-counts rather than fails loudly, so it earns the race run.
+      - name: Check
+        run: make check
 
-      - name: Vet
-        working-directory: ikuai_exporter
-        run: go vet ./...
+  build:
+    name: Build (image-style, published deps only)
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Mirrors the Dockerfile: resolve every dependency from the module proxy
+      # at the version go.mod pins, so a build that passes here is the build the
+      # published image produces.
+      - name: Build static linux binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /tmp/ikuai_exporter .
+          ls -l /tmp/ikuai_exporter

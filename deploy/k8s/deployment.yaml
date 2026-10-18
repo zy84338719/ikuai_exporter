@@ -44,6 +44,10 @@ spec:
           ports:
             - name: metrics
               containerPort: 9100
+          # The exporter drains in-flight scrapes on SIGTERM before closing the
+          # HTTP listener and the router client, so give it a window to do so.
+          # Keep this >= -shutdown-timeout (default 15s) plus scrape margin.
+          terminationGracePeriodSeconds: 30
           livenessProbe:
             httpGet:
               path: /healthz

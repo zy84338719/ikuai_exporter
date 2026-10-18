@@ -1,12 +1,10 @@
 FROM golang:1.24-alpine AS builder
 WORKDIR /build
 COPY . .
-# go.mod has a local replace (../ikuai-api) for development. In the image
-# build the sibling repo isn't present, so drop the replace and resolve
-# ikuai-api from the module proxy at the published version. Done after COPY so
-# the source go.mod (which carries the replace) is the one we edit.
-RUN go mod edit -dropreplace=github.com/zy84338719/ikuai-api && \
-    go get github.com/zy84338719/ikuai-api@v1.1.1
+# go.mod pins ikuai-api to its published version and carries no local replace,
+# so the build context is self-contained. GOWORK=off is belt-and-braces: a stray
+# go.work pointing at ../ikuai-api would fail here, where that path cannot exist.
+ENV GOWORK=off
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o ikuai_exporter .
 
 FROM scratch

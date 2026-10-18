@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,10 +12,48 @@ import (
 	ikuaiapi "github.com/zy84338719/ikuai-api"
 	"github.com/zy84338719/ikuai-api/service"
 
+	"github.com/oekit/logx"
+	oekerrors "github.com/oekit/pkg/errors"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const defaultTimeout = 15 * time.Second
+// log is a lazily-resolved package logger. Delegating (rather than capturing
+// Default() at init) is what makes it follow the backend main installs via
+// logx.UseSlog — a package-level Default() would be frozen before main runs,
+// and would diverge from the ikuai-api logger, which uses the same trick.
+var log = logx.Delegating("ikuai-exporter/metrics")
+
+// logAPIError logs err with the iKuai business code when the SDK produced a
+// BizError. Since v1.2.0 every APIError embeds one, so a router rejection
+// ("token expired", code 3007) reads as such instead of as a bare transport
+// string.
+func logAPIError(ctx context.Context, msg string, err error) {
+	if be, ok := oekerrors.AsBizError(err); ok {
+		log.CtxError(ctx, msg,
+			"biz_code", be.BizCode,
+			"http_code", be.HTTPCode,
+			"reason", be.Message,
+			"err", err,
+		)
+		return
+	}
+	log.CtxError(ctx, msg, "err", err)
+}
+
+const (
+	defaultTimeout = 15 * time.Second
+
+	// clientPageSize is the per-page size requested from the paged
+	// /monitoring/clients-online endpoint.
+	clientPageSize = 100
+
+	// maxClientPages bounds the paging walk. At the default page size that is
+	// 10k clients, far beyond any household or small-office router, and it
+	// keeps a misbehaving router that keeps echoing a full page from spinning
+	// the collector forever.
+	maxClientPages = 100
+)
 
 // v4 REST API response shapes.
 //
@@ -47,10 +84,10 @@ type v4OnlineUser struct {
 // connection counters and totals (a point value, unlike the /connections
 // timeseries endpoint).
 type v4SystemStream struct {
-	ConnectNum int   `json:"connect_num"`
-	TCP        int   `json:"tcp_connect_num"`
-	UDP        int   `json:"udp_connect_num"`
-	ICMP       int   `json:"icmp_connect_num"`
+	ConnectNum int `json:"connect_num"`
+	TCP        int `json:"tcp_connect_num"`
+	UDP        int `json:"udp_connect_num"`
+	ICMP       int `json:"icmp_connect_num"`
 }
 
 // v4SystemData mirrors /monitoring/system's data object.
@@ -58,14 +95,14 @@ type v4SystemStream struct {
 // envelope the collector sees {"sysinfo":{...}}, so the real fields live one
 // level down inside SysInfo.
 type v4SystemData struct {
-	Uptime     int64         `json:"uptime"`
-	VerInfo    v4VerInfo     `json:"verinfo"`
-	CPU        []string      `json:"cpu"`
-	CPUTemp    []float64     `json:"cputemp"`
-	Memory     v4MemInfo     `json:"memory"`
-	OnlineUser v4OnlineUser  `json:"online_user"`
+	Uptime     int64          `json:"uptime"`
+	VerInfo    v4VerInfo      `json:"verinfo"`
+	CPU        []string       `json:"cpu"`
+	CPUTemp    []float64      `json:"cputemp"`
+	Memory     v4MemInfo      `json:"memory"`
+	OnlineUser v4OnlineUser   `json:"online_user"`
 	Stream     v4SystemStream `json:"stream"`
-	SysInfo    *v4SystemData `json:"sysinfo,omitempty"` // v4 nests the payload here
+	SysInfo    *v4SystemData  `json:"sysinfo,omitempty"` // v4 nests the payload here
 }
 
 // v4IFaceCheck is one entry of /monitoring/interfaces-status[iface_check].
@@ -244,7 +281,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	raw, err := c.monitoring.GetMonitoringSystem(ctx)
 	if err != nil {
-		log.Printf("v4 /monitoring/system: %v", err)
+		logAPIError(ctx, "v4 /monitoring/system failed", err)
 		ch <- gauge(c.up, 0, c.router)
 		return
 	}
@@ -252,7 +289,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	var sys v4SystemData
 	if err := json.Unmarshal(raw, &sys); err != nil {
-		log.Printf("decode /monitoring/system: %v", err)
+		log.CtxError(ctx, "decode /monitoring/system", "err", err)
 		return
 	}
 	if sys.SysInfo != nil && sys.Uptime == 0 && sys.SysInfo.Uptime != 0 {
@@ -261,36 +298,103 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectSystem(ch, &sys)
 
 	if raw, err := c.monitoring.GetMonitoringInterfacesStatus(ctx); err != nil {
-		log.Printf("v4 /monitoring/interfaces-status: %v", err)
+		logAPIError(ctx, "v4 /monitoring/interfaces-status failed", err)
 	} else {
 		var ifaces v4InterfacesData
 		if err := json.Unmarshal(raw, &ifaces); err != nil {
-			log.Printf("decode /monitoring/interfaces-status: %v", err)
+			log.CtxError(ctx, "decode /monitoring/interfaces-status", "err", err)
 		} else {
 			c.collectIfaces(ch, ifaces.IFaceCheck, ifaces.IFaceStream)
 		}
 	}
 
-	if raw, err := c.monitoring.GetMonitoringClientsOnline(ctx); err != nil {
-		log.Printf("v4 /monitoring/clients-online: %v", err)
-	} else {
-		// The router returns {"data":[...]}; the SDK unwraps the envelope so we
-		// still have to peel the inner "data" key off.
-		var wrap struct {
-			Data []v4Client `json:"data"`
-		}
-		if err := json.Unmarshal(raw, &wrap); err != nil {
-			// Some firmware may return a bare array.
-			var arr []v4Client
-			if jerr := json.Unmarshal(raw, &arr); jerr == nil {
-				c.collectClients(ch, arr)
-			} else {
-				log.Printf("decode /monitoring/clients-online: %v", err)
+	devices, err := c.fetchAllOnlineClients(ctx)
+	if err != nil {
+		logAPIError(ctx, "v4 /monitoring/clients-online failed", err)
+		return
+	}
+	c.collectClients(ch, devices)
+}
+
+// fetchAllOnlineClients walks every page of /monitoring/clients-online.
+//
+// The catalog marks this endpoint "paged", and the unpaged
+// GetMonitoringClientsOnline sends no limit at all — so it returns whatever
+// single page the router considers default. Since ikuai-api v1.2.0 fixed the
+// paging key to `limit` (the SDK used to send the ignored `page_size`), an
+// explicit limit+page walk is what makes devices_online_total mean "all
+// online clients" rather than "the first N".
+func (c *Collector) fetchAllOnlineClients(ctx context.Context) ([]v4Client, error) {
+	var out []v4Client
+	for page := 1; page <= maxClientPages; page++ {
+		raw, err := c.monitoring.QueryMonitoringClientsOnline(ctx, &service.MonitoringClientsOnlineQueryOptions{
+			Page:     page,
+			PageSize: clientPageSize,
+		})
+		if err != nil {
+			// A failure past the first page still leaves usable data; only a
+			// first-page failure means we have nothing.
+			if page > 1 && len(out) > 0 {
+				logAPIError(ctx, "clients-online paging stopped early",
+					oekerrors.Wrap(err, "paging clients-online", "page", page, "collected", len(out)))
+				return out, nil
 			}
-		} else {
-			c.collectClients(ch, wrap.Data)
+			return nil, err
+		}
+
+		batch, err := decodeClientPage(raw)
+		if err != nil {
+			if len(out) > 0 {
+				log.CtxError(ctx, "decode clients-online page stopped early",
+					"page", page, "collected", len(out), "err", err)
+				return out, nil
+			}
+			return nil, err
+		}
+		out = append(out, batch...)
+
+		// A short (or empty) page means the collection is exhausted.
+		if len(batch) < clientPageSize {
+			return out, nil
 		}
 	}
+	log.CtxWarn(ctx, "clients-online paging hit the page cap; client list may be truncated",
+		"pages", maxClientPages, "page_size", clientPageSize, "collected", len(out))
+	return out, nil
+}
+
+// decodeClientPage peels whichever wrapping shape the router used. The v4 API
+// answers lists three ways — a bare array, {"data": [...]}, and
+// {"<group>_data": [...], "<group>_total": n} (the object-group / DHCP list
+// style) — and the firmware is not consistent about which, so all three are
+// accepted rather than betting on one.
+func decodeClientPage(raw json.RawMessage) ([]v4Client, error) {
+	var bare []v4Client
+	if err := json.Unmarshal(raw, &bare); err == nil {
+		return bare, nil
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, oekerrors.Wrap(err, "clients-online payload is neither an array nor an object")
+	}
+	if inner, ok := obj["data"]; ok {
+		var out []v4Client
+		if err := json.Unmarshal(inner, &out); err != nil {
+			return nil, oekerrors.Wrap(err, "clients-online data key is not an array")
+		}
+		return out, nil
+	}
+	for key, inner := range obj {
+		if strings.HasSuffix(key, "_data") {
+			var out []v4Client
+			if err := json.Unmarshal(inner, &out); err != nil {
+				return nil, oekerrors.Wrap(err, "clients-online collection key is not an array", "key", key)
+			}
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("clients-online response had no recognisable collection key")
 }
 
 func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
