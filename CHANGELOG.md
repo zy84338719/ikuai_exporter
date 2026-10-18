@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.4
+
+依赖例行跟进。**ikuai-api 无新版本**——v1.3.0 仍是最新。
+
+### Changed
+
+- `oekit/concurrency` v0.12.0 → **v0.13.0**。
+  本 exporter 只用到 `async.GoSafeLabeled`；v0.13.0 的全部改动都在熔断器
+  （熔断期流量收敛到探测级、状态可观测出口），不触及本项目走的路径。
+  已逐符号比对确认 `async` 与顶层包的公开 API 无变化。
+
 ## v1.1.3
 
 跟进 ikuai-api v1.3.0。

@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/oekit/bootstrap v0.6.2
-	github.com/oekit/concurrency v0.12.0
+	github.com/oekit/concurrency v0.13.0
 	github.com/oekit/logx v0.7.0
 	github.com/oekit/pkg v0.13.0
 	github.com/prometheus/client_golang v1.23.2

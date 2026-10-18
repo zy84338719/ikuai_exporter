@@ -21,8 +21,8 @@ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/oekit/bootstrap v0.6.2 h1:BHdWUycZxylSz/CMGdrcNkMjhb357ZZP+vR715ojMxI=
 github.com/oekit/bootstrap v0.6.2/go.mod h1:Mj2x/rXK3qkvYKBGOEKL1pnHHVPq9ndE5i6/fPMwDJY=
-github.com/oekit/concurrency v0.12.0 h1:ZvFxS9IzX47uF9fIYd7Io0Ufh+QFcHUIEp1ghs7MgZo=
-github.com/oekit/concurrency v0.12.0/go.mod h1:K5wV2UwkfvYUQFOawBCmaE29AGhWTGs3hsKu2vvKw4Y=
+github.com/oekit/concurrency v0.13.0 h1:qt4z6BUZFwW3T/vNrrDL2P3apmGJVnLYA5/1oVbkrIE=
+github.com/oekit/concurrency v0.13.0/go.mod h1:K5wV2UwkfvYUQFOawBCmaE29AGhWTGs3hsKu2vvKw4Y=
 github.com/oekit/core v0.8.0 h1:2m87mEZpUlkatXzhSDXXCqFKTOltzKiTn+ZHWfU4IbI=
 github.com/oekit/core v0.8.0/go.mod h1:HhBTwYHU5MUp9tfNvHjfZv6P4yglQmn4jKmz98dUIsM=
 github.com/oekit/logx v0.7.0 h1:CHyzcS6uR2Gq2JkOIqW0b04mHhu48+4ESm7dQvlk1RA=
