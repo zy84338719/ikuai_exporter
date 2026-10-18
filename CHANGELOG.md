@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## v1.1.1
+
+跟进 oekit 模块升级，并修掉一个日志流不一致。
+
+### Changed
+
+- **oekit 依赖跟进最新版**：`concurrency` v0.5.4 → **v0.12.0**、
+  `logx` v0.6.0 → **v0.7.0**、`pkg` v0.11.0 → **v0.13.0**、
+  `core` v0.6.0 → **v0.8.0**（`bootstrap` v0.6.2 已是最新）。
+  已验证 `core` v0.8.0 与 `bootstrap` v0.6.2 组合下优雅关停行为不变：
+  逆序关闭与全 JSON 日志均正常。
+- `metrics/collector.go` 中解码失败改用 `oekerrors.New`。
+  `pkg` v0.12.0 起 `errors` 包补齐 `New`/`As`/`Is`/`Unwrap`，与 stdlib 同型，
+  此前为绕开缺口而使用的 `fmt.Errorf` 不再必要——「同一进程只允许一套
+  errors 包」的红线现在可以完整执行。
+
+### Fixed
+
+- **handler panic 不再污染日志流。** net/http 自行 recover 后把 panic 通过
+  `Server.ErrorLog` 输出，默认走 stderr 纯文本，会插进已经统一成 JSON 的日志流里。
+  现通过 `slog.NewLogLogger(logx.SlogHandler(...))` 接入 logx，panic 与 TLS
+  握手错误都变成结构化事件。
+
+## v1.1.0
 
 升级到 ikuai-api **v1.2.0** 并按 [oekit](https://oekit.github.io) 工程契约重构。
 

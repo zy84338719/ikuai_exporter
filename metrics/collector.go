@@ -394,7 +394,7 @@ func decodeClientPage(raw json.RawMessage) ([]v4Client, error) {
 			return out, nil
 		}
 	}
-	return nil, fmt.Errorf("clients-online response had no recognisable collection key")
+	return nil, oekerrors.New("clients-online response had no recognisable collection key")
 }
 
 func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {

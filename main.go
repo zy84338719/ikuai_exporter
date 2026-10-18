@@ -124,6 +124,11 @@ func main() {
 		Addr:              listenAddr,
 		Handler:           newMux(registry, collector, metricsPath),
 		ReadHeaderTimeout: readHeaderTimeout,
+		// net/http recovers a handler panic itself and writes it through
+		// ErrorLog — defaulting to plain text on stderr. Routing that into
+		// logx keeps panics and TLS handshake errors inside the structured
+		// JSON stream instead of interleaving unstructured lines with it.
+		ErrorLog: slog.NewLogLogger(logx.SlogHandler(logx.WithService(namespace)), slog.LevelError),
 	}
 
 	if err := b.Run(func(app *bootstrap.App) error {

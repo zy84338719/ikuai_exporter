@@ -63,11 +63,13 @@ func collectValues(t *testing.T, c *Collector) map[string]float64 {
 
 	ch := make(chan prometheus.Metric)
 	var wg sync.WaitGroup
+	finished := false
 	wg.Add(1)
 	async.GoSafeLabeled("collect", func() {
 		defer wg.Done()
 		defer close(ch)
 		c.Collect(ch)
+		finished = true
 	})
 
 	out := make(map[string]float64, 1024)
@@ -85,6 +87,12 @@ func collectValues(t *testing.T, c *Collector) map[string]float64 {
 		}
 	}
 	wg.Wait()
+	// GoSafe recovers a panic rather than crashing the test binary. Without this
+	// check a panicking Collect would surface as a pile of "metric not emitted"
+	// failures that say nothing about the actual cause.
+	if !finished {
+		t.Error("Collect panicked or returned early (GoSafe recovered it); see the panic report above")
+	}
 	return out
 }
 
