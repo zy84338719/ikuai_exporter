@@ -9,7 +9,7 @@ require (
 	github.com/oekit/pkg v0.13.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/zy84338719/ikuai-api v1.2.0
+	github.com/zy84338719/ikuai-api v1.3.0
 )
 
 require (

@@ -23,8 +23,6 @@ github.com/oekit/bootstrap v0.6.2 h1:BHdWUycZxylSz/CMGdrcNkMjhb357ZZP+vR715ojMxI
 github.com/oekit/bootstrap v0.6.2/go.mod h1:Mj2x/rXK3qkvYKBGOEKL1pnHHVPq9ndE5i6/fPMwDJY=
 github.com/oekit/concurrency v0.12.0 h1:ZvFxS9IzX47uF9fIYd7Io0Ufh+QFcHUIEp1ghs7MgZo=
 github.com/oekit/concurrency v0.12.0/go.mod h1:K5wV2UwkfvYUQFOawBCmaE29AGhWTGs3hsKu2vvKw4Y=
-github.com/oekit/core v0.6.0 h1:3D0r8ff/nOi6/4cc65gxgIDnAznh1XRFzD3QEUOaRWU=
-github.com/oekit/core v0.6.0/go.mod h1:HhBTwYHU5MUp9tfNvHjfZv6P4yglQmn4jKmz98dUIsM=
 github.com/oekit/core v0.8.0 h1:2m87mEZpUlkatXzhSDXXCqFKTOltzKiTn+ZHWfU4IbI=
 github.com/oekit/core v0.8.0/go.mod h1:HhBTwYHU5MUp9tfNvHjfZv6P4yglQmn4jKmz98dUIsM=
 github.com/oekit/logx v0.7.0 h1:CHyzcS6uR2Gq2JkOIqW0b04mHhu48+4ESm7dQvlk1RA=
@@ -45,8 +43,8 @@ github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjR
 github.com/rogpeppe/go-internal v1.10.0/go.mod h1:UQnix2H7Ngw/k4C5ijL5+65zddjncjaFoBhdsK/akog=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/zy84338719/ikuai-api v1.2.0 h1:WYgRrLg+REFiyn+g08Ul4PBETmp6RaV/NFWbVWp/O9w=
-github.com/zy84338719/ikuai-api v1.2.0/go.mod h1:Q5oV3ELsif0kULq0MncUW9bLP+FweKCVaGfTtuuZ9ik=
+github.com/zy84338719/ikuai-api v1.3.0 h1:pQTpDpKSU4ngSGQwkYowT6t2+Ced6jTjiXkkbblI18s=
+github.com/zy84338719/ikuai-api v1.3.0/go.mod h1:1a4O2fQjZG+dO6GcqdtiQ+dj4zyLS5cAoL6rRnHgt9g=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.yaml.in/yaml/v2 v2.4.2 h1:DzmwEr2rDGHl7lsFgAHxmNz/1NlQ7xLIrlN2h5d1eGI=
