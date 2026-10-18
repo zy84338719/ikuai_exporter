@@ -109,12 +109,17 @@ func devicesOnlineTotal(t *testing.T, values map[string]float64) float64 {
 	return 0
 }
 
-// systemOK is a minimal /monitoring/system body, so paging tests can focus on
-// the clients-online endpoint.
+// systemOK mirrors what a real iKuai 4.0.313 router actually answers, field
+// names included. An earlier version of this fixture used "avail",
+// "ver_string" and "model_name" — spellings the firmware never emits — so the
+// resulting memory and version metrics were wrong on real hardware while every
+// test stayed green. Keep this in sync with the device, not with a guess.
 const systemOK = `{"code":0,"results":{"sysinfo":{"uptime":3600,"cpu":["12.5%"],"cputemp":[42.6],` +
-	`"memory":{"total":1000000,"avail":400000,"cached":50000,"buffers":30000},"online_user":{"count":3},` +
+	`"memory":{"total":24398672,"available":3246784,"free":206428,"cached":3356076,"buffers":216420,` +
+	`"used":"86%"},"online_user":{"count":3},` +
 	`"stream":{"connect_num":128,"tcp_connect_num":80,"udp_connect_num":40,"icmp_connect_num":2},` +
-	`"verinfo":{"version":"4.0.1","arch":"x86","ver_string":"4.0.1 x64","model_name":"X10"}}}}`
+	`"verinfo":{"modelname":"X10","verstring":"4.0.313 x64 Build202609281457","version":"4.0.313",` +
+	`"build_date":202609281457,"arch":"x86","sysbit":"x64"}}}}`
 
 func TestCollectSystem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -360,6 +365,87 @@ func TestCollectRouterDown(t *testing.T) {
 	if upVal != 0 {
 		t.Errorf("expected ikuai_up=0 when router is down, got %v", upVal)
 	}
+}
+
+// TestSystemMetricFieldNames pins the /monitoring/system field mapping to what
+// the firmware actually emits. Both cases below were wrong on real hardware
+// while the suite stayed green, because the fixture mirrored the exporter's
+// assumption instead of the device's response.
+func TestSystemMetricFieldNames(t *testing.T) {
+	values := collectValues(t, NewCollector("ikuai", "r", newTestClient(t, systemServer(t, systemOK))))
+
+	var (
+		memTotal, memUsed, version float64
+		haveVersion                bool
+	)
+	for desc, v := range values {
+		switch {
+		case strings.Contains(desc, "ikuai_memory_total_kibibytes"):
+			memTotal = v
+		case strings.Contains(desc, "ikuai_memory_used_kibibytes"):
+			memUsed = v
+		case strings.Contains(desc, "ikuai_version_info"):
+			version, haveVersion = v, true
+		}
+	}
+
+	// The router sends "available" (not "avail"). Reading the wrong key gives
+	// 0 and makes used memory collapse onto the total.
+	const total = 24398672.0
+	const available = 3246784.0
+	if memTotal != total {
+		t.Errorf("memory total = %v, want %v", memTotal, total)
+	}
+	if want := total - available; memUsed != want {
+		t.Errorf("memory used = %v, want %v (total-available)", memUsed, want)
+	}
+	if memUsed == memTotal {
+		t.Error("memory used equals total — 'avail' was read instead of 'available'")
+	}
+
+	// The router sends "verstring"/"modelname" without underscores.
+	if !haveVersion {
+		t.Error("ikuai_version_info was not emitted; firmware spells it \"verstring\", not \"ver_string\"")
+	} else if version != 1 {
+		t.Errorf("version_info value = %v, want 1", version)
+	}
+}
+
+// TestSystemAcceptsUnderscoredAliases keeps the older spelling working, since
+// firmware revisions are not consistent about these two names.
+func TestSystemAcceptsUnderscoredAliases(t *testing.T) {
+	body := `{"code":0,"results":{"sysinfo":{"uptime":3600,"cpu":["1%"],"cputemp":[40],` +
+		`"memory":{"total":1000,"avail":400,"cached":0,"buffers":0},"online_user":{"count":0},` +
+		`"stream":{"connect_num":0},"verinfo":{"version":"4.0.0","arch":"arm",` +
+		`"ver_string":"4.0.0 arm","model_name":"Legacy"}}}}`
+
+	values := collectValues(t, NewCollector("ikuai", "r", newTestClient(t, systemServer(t, body))))
+
+	var memUsed float64
+	for desc, v := range values {
+		if strings.Contains(desc, "ikuai_memory_used_kibibytes") {
+			memUsed = v
+		}
+	}
+	if memUsed != 600 {
+		t.Errorf("memory used = %v, want 600 (total-avail via the legacy alias)", memUsed)
+	}
+}
+
+// systemServer serves one fixed /monitoring/system body and an empty result for
+// the other endpoints a Collect cycle touches.
+func systemServer(t *testing.T, systemBody string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/monitoring/system") {
+			_, _ = w.Write([]byte(systemBody))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"results":{"data":[]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func TestToHTTPS(t *testing.T) {

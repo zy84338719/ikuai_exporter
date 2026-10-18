@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.1.2
+
+真机部署验证时发现的两个**字段映射错误**。两者都自 v1.0.1 起就存在且从未被测出——
+因为单测 fixture 抄的是代码的假设，而不是设备的真实响应。
+
+### Fixed
+
+- **`ikuai_memory_used_kibibytes` 恒等于 total（100% 内存被报成已用）。**
+  固件在 `sysinfo.memory` 里给的是 `available`，代码读的是 `avail`；后者不存在，
+  于是拿到 0，`used = total - 0 = total`。现在两种拼写都解码。
+  注意固件自己的 `used` 字段是百分比字符串（`"86%"`）而非字节数，不能直接取，
+  因此仍由 `total - available` 推导，并对负值做了下界保护。
+
+- **`ikuai_version_info` 从未被输出。** 固件给的是 `verstring` / `modelname`（无下划线），
+  代码写的是 `ver_string` / `model_name`，导致 `VerString` 恒为空、该指标被条件跳过，
+  Grafana 的版本面板一直是空的。现在两种拼写都解码。
+
+### Tests
+
+- 单测 fixture 换成**真机（iKuai 4.0.313）的真实响应**，而非此前的臆测字段名——
+  这正是两个 bug 能长期存活的原因。
+- 新增 `TestSystemMetricFieldNames`：断言 `used == total - available`、
+  `version_info` 存在，并显式检查 `used != total`。
+- 新增 `TestSystemAcceptsUnderscoredAliases`：保证旧的下划线拼写同样可用，
+  兼容不同固件版本。
+
 ## v1.1.1
 
 跟进 oekit 模块升级，并修掉一个日志流不一致。

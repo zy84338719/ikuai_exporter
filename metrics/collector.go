@@ -62,18 +62,58 @@ const (
 // structs (the SDK intentionally ships no typed models). Field names and
 // nesting match what the iKuai v4 firmware actually emits.
 
+// v4VerInfo mirrors sysinfo.verinfo.
+//
+// The firmware spells two of these fields without the underscore that the
+// exporter originally assumed: a 4.0.313 router answers "verstring" and
+// "modelname", not "ver_string"/"model_name". Both spellings are decoded so
+// the metric works across firmware revisions — with only the underscored ones
+// wired up, ikuai_version_info was silently never emitted.
 type v4VerInfo struct {
-	Version   string `json:"version"`
-	Arch      string `json:"arch"`
-	VerString string `json:"ver_string"`
-	ModelName string `json:"model_name"`
+	Version      string `json:"version"`
+	Arch         string `json:"arch"`
+	VerString    string `json:"verstring"`
+	VerStringAlt string `json:"ver_string"`
+	ModelName    string `json:"modelname"`
+	ModelNameAlt string `json:"model_name"`
 }
 
+// verString coalesces the two spellings the firmware uses.
+func (v v4VerInfo) verString() string {
+	if v.VerString != "" {
+		return v.VerString
+	}
+	return v.VerStringAlt
+}
+
+// modelName coalesces the two spellings the firmware uses.
+func (v v4VerInfo) modelName() string {
+	if v.ModelName != "" {
+		return v.ModelName
+	}
+	return v.ModelNameAlt
+}
+
+// v4MemInfo mirrors sysinfo.memory.
+//
+// Note the router's own "used" field is a percentage *string* ("86%"), not a
+// byte count, so used memory has to be derived: total - available. The field
+// is "available", not "avail" — reading the latter yields zero and makes
+// ikuai_memory_used_kibibytes report the full total as used.
 type v4MemInfo struct {
 	Total     int64 `json:"total"`
-	Available int64 `json:"avail"`
+	Available int64 `json:"available"`
+	AvailAlt  int64 `json:"avail"`
 	Cached    int64 `json:"cached"`
 	Buffers   int64 `json:"buffers"`
+}
+
+// available coalesces the two spellings the firmware uses.
+func (m v4MemInfo) available() int64 {
+	if m.Available != 0 {
+		return m.Available
+	}
+	return m.AvailAlt
 }
 
 type v4OnlineUser struct {
@@ -400,8 +440,8 @@ func decodeClientPage(raw json.RawMessage) ([]v4Client, error) {
 func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
 	ch <- gauge(c.uptime, float64(s.Uptime), c.router)
 
-	if s.VerInfo.VerString != "" {
-		ch <- gauge(c.version, 1, c.r(s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.VerString, s.VerInfo.ModelName)...)
+	if s.VerInfo.verString() != "" {
+		ch <- gauge(c.version, 1, c.r(s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.verString(), s.VerInfo.modelName())...)
 	}
 
 	for i, cpu := range s.CPU {
@@ -414,7 +454,12 @@ func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) 
 	}
 
 	if s.Memory.Total > 0 {
-		used := s.Memory.Total - s.Memory.Available
+		// Derive used memory rather than reading the router's "used" field,
+		// which is a percentage string rather than a byte count.
+		used := s.Memory.Total - s.Memory.available()
+		if used < 0 {
+			used = 0
+		}
 		ch <- gauge(c.memTotal, float64(s.Memory.Total), c.router)
 		ch <- gauge(c.memUsed, float64(used), c.router)
 		ch <- gauge(c.memCached, float64(s.Memory.Cached), c.router)
