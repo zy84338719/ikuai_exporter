@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.1.5
+
+oekit 全模块跟进到 2026-11-07 的最新一批发布，ikuai-api 跟进到 v1.3.2。
+
+### Changed
+
+- **oekit 全模块升级**：`bootstrap` v0.6.2 → **v0.6.15**、
+  `concurrency` v0.13.0 → **v0.28.1**、`core` v0.8.0 → **v0.13.1**、
+  `logx` v0.7.0 → **v0.8.6**、`pkg` v0.13.0 → **v0.37.1**。
+  编译、vet 与全部单测零改动通过——本项目走到的 API 路径没有破坏性变更。
+- **`ikuai-api` v1.3.0 → v1.3.2**。
+  v1.3.1 引入 `pkg/httpjson.SelectRetryDelay`，把 `Retry-After` 提示钳制在
+  5 分钟以内或本地指数曲线以内——此前一个 `Retry-After: 86400` 的响应头
+  会让重试中的客户端 parked 一整天。这条路径正是 `/ready` 探针在路由器
+  不可达时走的。
+  v1.3.2 是纯架构重构（client god-object 拆分为 client/dryrun/envelope/retry，
+  codegen 改 AST 重写），对外行为不变。
+
+### Notable upstream behaviour change
+
+- **bootstrap v0.6.11 起，关停失败不再被吞**（BREAKING）。此前 `closeAll`
+  对 closer 错误只记日志后继续，错误进不了 `lifecycle.Manager` 的
+  `shutdownErrs`，`Run` 只返回 `runErr`——资源关闭失败（例如 SDK 客户端
+  连接未优雅断开）时**进程退出码仍是 0**，滚动发版门禁会把「带着未落盘
+  数据退出」判成成功。现在关停错误会聚合并由 `Run` 上抛。
+  本 exporter 的 `main.go` 早已按 `b.Run` 返回值决定退出码，因此自动受益：
+  客户端关闭失败现在会让进程以非零码退出。
+
 ## v1.1.4
 
 依赖例行跟进。**ikuai-api 无新版本**——v1.3.0 仍是最新。

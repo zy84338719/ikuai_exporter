@@ -3,13 +3,13 @@ module github.com/zy84338719/ikuai_exporter
 go 1.24.0
 
 require (
-	github.com/oekit/bootstrap v0.6.2
-	github.com/oekit/concurrency v0.13.0
-	github.com/oekit/logx v0.7.0
-	github.com/oekit/pkg v0.13.0
+	github.com/oekit/bootstrap v0.6.15
+	github.com/oekit/concurrency v0.28.1
+	github.com/oekit/logx v0.8.6
+	github.com/oekit/pkg v0.37.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/zy84338719/ikuai-api v1.3.0
+	github.com/zy84338719/ikuai-api v1.3.2
 )
 
 require (
@@ -17,7 +17,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/oekit/core v0.8.0 // indirect
+	github.com/oekit/core v0.13.1 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
