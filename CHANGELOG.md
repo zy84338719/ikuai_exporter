@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.2.1
+
+### Fixed
+
+- **`app_build_info` 的版本标签不再是 unknown**：branch / build_time / commit 三个
+  label 此前恒为 `"unknown"`——`github.com/oekit/core/version` 的默认值就是
+  unknown，而 Dockerfile 与 CI 的构建命令只带了 `-s -w`，从未用 `-X` 注入。
+  后果是线上 exporter 无法从自身指标判断跑的是哪个构建。Dockerfile 新增
+  APP_VERSION / GIT_COMMIT / GIT_BRANCH / BUILD_TIME 四个 build-arg，CI 在构建时
+  传入真实的 sha、分支、构建时刻与版本号。
+
 ## v1.2.0
 
 ikuai-api 跟进到 v1.3.4，oekit 升到 httpx v0.12.0 / metrics v0.4.0 /
