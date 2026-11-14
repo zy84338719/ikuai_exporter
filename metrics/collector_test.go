@@ -501,6 +501,43 @@ func TestParseConnectNum(t *testing.T) {
 	}
 }
 
+// TestCollectRunsLanesInParallel asserts the three collection lanes really
+// run concurrently.
+//
+// Each endpoint answers after 250ms, so a serial collector needs ~750ms for
+// one scrape while a parallel one needs ~250ms. The bound below is generous
+// enough to survive a loaded CI while still failing on a serial regression.
+func TestCollectRunsLanesInParallel(t *testing.T) {
+	const delay = 250 * time.Millisecond
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(delay)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/monitoring/system"):
+			_, _ = w.Write([]byte(systemOK))
+		case strings.HasSuffix(r.URL.Path, "/monitoring/interfaces-status"):
+			_, _ = w.Write([]byte(`{"code":0,"results":{"iface_check":[],"iface_stream":[]}}`))
+		case strings.HasSuffix(r.URL.Path, "/monitoring/clients-online"):
+			_, _ = w.Write([]byte(`{"code":0,"results":{"data":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"code":0,"results":{"data":null}}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := NewCollector("ikuai", "slow-router", newTestClient(t, srv))
+
+	start := time.Now()
+	collectValues(t, c)
+	elapsed := time.Since(start)
+
+	// Serial would be 3×250ms; parallel is one lane's 250ms.
+	if elapsed >= 600*time.Millisecond {
+		t.Errorf("scrape took %s, want well under 3×%s — the lanes do not run in parallel", elapsed, delay)
+	}
+}
+
 // TestHealthCheckUsesContext asserts the readiness probe respects the caller's
 // deadline instead of hanging on a wedged router.
 func TestHealthCheckUsesContext(t *testing.T) {

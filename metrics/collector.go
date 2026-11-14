@@ -12,6 +12,7 @@ import (
 	ikuaiapi "github.com/zy84338719/ikuai-api"
 	"github.com/zy84338719/ikuai-api/service"
 
+	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/logx"
 	oekerrors "github.com/oekit/pkg/errors"
 
@@ -312,6 +313,28 @@ func (c *Collector) r(labels ...string) []string {
 	return append(labels, c.router)
 }
 
+// emitter 收一路采集产出的指标。
+//
+// 各路先各自攒进 slice，再由主协程按固定顺序发出——并发写 prometheus 的
+// channel 虽然安全，但固定顺序让抓取面稳定可测。
+type emitter func(prometheus.Metric)
+
+// laneResult 一条采集支路的产出。
+type laneResult struct {
+	metrics []prometheus.Metric
+}
+
+// Collect gathers one scrape.
+//
+// The three lanes run in parallel: the router answers /monitoring/system,
+// /monitoring/interfaces-status and the paged /monitoring/clients-online
+// walk independently, so a scrape costs the slowest lane instead of the sum
+// of all three. Each lane collects into its own slice and the main goroutine
+// emits them in a fixed order (system → interfaces → clients), so the scrape
+// surface stays deterministic.
+//
+// up keeps its meaning: it is decided by the system lane alone. The other
+// two lanes log their failures and emit nothing, exactly as before.
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -319,41 +342,90 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
+	for _, slot := range c.collectLanes(ctx) {
+		for _, m := range slot.Val.metrics {
+			ch <- m
+		}
+	}
+}
+
+// collectLanes fans the three collection lanes out concurrently.
+//
+// syncx.FanInLimitCtx is ctx-aware: once the collection deadline passes, no
+// further lane is started. Slots come back in index order, so the emitted
+// order stays system → interfaces → clients.
+func (c *Collector) collectLanes(ctx context.Context) []syncx.Slot[laneResult] {
+	return syncx.FanInLimitCtx(ctx, 3, 3, func(ctx context.Context, i int) (laneResult, error) {
+		switch i {
+		case 0:
+			return c.collectSystemLane(ctx)
+		case 1:
+			return c.collectInterfacesLane(ctx)
+		default:
+			return c.collectClientsLane(ctx)
+		}
+	})
+}
+
+// collectSystemLane is the system lane: up plus the whole-device metrics.
+//
+// A failure here is what makes up=0; the other lanes are unaffected.
+func (c *Collector) collectSystemLane(ctx context.Context) (laneResult, error) {
+	var out []prometheus.Metric
+	emit := func(m prometheus.Metric) { out = append(out, m) }
+
 	raw, err := c.monitoring.GetMonitoringSystem(ctx)
 	if err != nil {
 		logAPIError(ctx, "v4 /monitoring/system failed", err)
-		ch <- gauge(c.up, 0, c.router)
-		return
+		emit(gauge(c.up, 0, c.router))
+		return laneResult{metrics: out}, err
 	}
-	ch <- gauge(c.up, 1, c.router)
+	emit(gauge(c.up, 1, c.router))
 
 	var sys v4SystemData
 	if err := json.Unmarshal(raw, &sys); err != nil {
 		log.CtxError(ctx, "decode /monitoring/system", "err", err)
-		return
+		return laneResult{metrics: out}, err
 	}
 	if sys.SysInfo != nil && sys.Uptime == 0 && sys.SysInfo.Uptime != 0 {
 		sys = *sys.SysInfo
 	}
-	c.collectSystem(ch, &sys)
+	c.collectSystem(emit, &sys)
+	return laneResult{metrics: out}, nil
+}
 
-	if raw, err := c.monitoring.GetMonitoringInterfacesStatus(ctx); err != nil {
+// collectInterfacesLane is the interfaces lane.
+func (c *Collector) collectInterfacesLane(ctx context.Context) (laneResult, error) {
+	var out []prometheus.Metric
+	emit := func(m prometheus.Metric) { out = append(out, m) }
+
+	raw, err := c.monitoring.GetMonitoringInterfacesStatus(ctx)
+	if err != nil {
 		logAPIError(ctx, "v4 /monitoring/interfaces-status failed", err)
-	} else {
-		var ifaces v4InterfacesData
-		if err := json.Unmarshal(raw, &ifaces); err != nil {
-			log.CtxError(ctx, "decode /monitoring/interfaces-status", "err", err)
-		} else {
-			c.collectIfaces(ch, ifaces.IFaceCheck, ifaces.IFaceStream)
-		}
+		return laneResult{metrics: out}, err
 	}
+	var ifaces v4InterfacesData
+	if err := json.Unmarshal(raw, &ifaces); err != nil {
+		log.CtxError(ctx, "decode /monitoring/interfaces-status", "err", err)
+		return laneResult{metrics: out}, err
+	}
+	c.collectIfaces(emit, ifaces.IFaceCheck, ifaces.IFaceStream)
+	return laneResult{metrics: out}, nil
+}
+
+// collectClientsLane is the clients lane — the paged walk counts as one lane,
+// not one lane per page.
+func (c *Collector) collectClientsLane(ctx context.Context) (laneResult, error) {
+	var out []prometheus.Metric
+	emit := func(m prometheus.Metric) { out = append(out, m) }
 
 	devices, err := c.fetchAllOnlineClients(ctx)
 	if err != nil {
 		logAPIError(ctx, "v4 /monitoring/clients-online failed", err)
-		return
+		return laneResult{metrics: out}, err
 	}
-	c.collectClients(ch, devices)
+	c.collectClients(emit, devices)
+	return laneResult{metrics: out}, nil
 }
 
 // fetchAllOnlineClients walks every page of /monitoring/clients-online.
@@ -437,20 +509,20 @@ func decodeClientPage(raw json.RawMessage) ([]v4Client, error) {
 	return nil, oekerrors.New("clients-online response had no recognisable collection key")
 }
 
-func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) {
-	ch <- gauge(c.uptime, float64(s.Uptime), c.router)
+func (c *Collector) collectSystem(emit emitter, s *v4SystemData) {
+	emit(gauge(c.uptime, float64(s.Uptime), c.router))
 
 	if s.VerInfo.verString() != "" {
-		ch <- gauge(c.version, 1, c.r(s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.verString(), s.VerInfo.modelName())...)
+		emit(gauge(c.version, 1, c.r(s.VerInfo.Version, s.VerInfo.Arch, s.VerInfo.verString(), s.VerInfo.modelName())...))
 	}
 
 	for i, cpu := range s.CPU {
 		if v, err := parsePct(cpu); err == nil {
-			ch <- gauge(c.cpuUsage, v, c.r(fmt.Sprintf("core%d", i))...)
+			emit(gauge(c.cpuUsage, v, c.r(fmt.Sprintf("core%d", i))...))
 		}
 	}
 	if len(s.CPUTemp) > 0 {
-		ch <- gauge(c.cpuTemp, s.CPUTemp[0], c.router)
+		emit(gauge(c.cpuTemp, s.CPUTemp[0], c.router))
 	}
 
 	if s.Memory.Total > 0 {
@@ -460,31 +532,31 @@ func (c *Collector) collectSystem(ch chan<- prometheus.Metric, s *v4SystemData) 
 		if used < 0 {
 			used = 0
 		}
-		ch <- gauge(c.memTotal, float64(s.Memory.Total), c.router)
-		ch <- gauge(c.memUsed, float64(used), c.router)
-		ch <- gauge(c.memCached, float64(s.Memory.Cached), c.router)
-		ch <- gauge(c.memBuffers, float64(s.Memory.Buffers), c.router)
+		emit(gauge(c.memTotal, float64(s.Memory.Total), c.router))
+		emit(gauge(c.memUsed, float64(used), c.router))
+		emit(gauge(c.memCached, float64(s.Memory.Cached), c.router))
+		emit(gauge(c.memBuffers, float64(s.Memory.Buffers), c.router))
 	}
 
-	ch <- gauge(c.onlineUsers, float64(s.OnlineUser.Count), c.router)
+	emit(gauge(c.onlineUsers, float64(s.OnlineUser.Count), c.router))
 
 	// Connection counters from sysinfo.stream (point value, not the timeseries
 	// /monitoring/connections endpoint).
 	if s.Stream.ConnectNum > 0 {
-		ch <- gauge(c.connections, float64(s.Stream.ConnectNum), c.router)
+		emit(gauge(c.connections, float64(s.Stream.ConnectNum), c.router))
 		if s.Stream.TCP > 0 {
-			ch <- gauge(c.connectionsProto, float64(s.Stream.TCP), c.r("tcp")...)
+			emit(gauge(c.connectionsProto, float64(s.Stream.TCP), c.r("tcp")...))
 		}
 		if s.Stream.UDP > 0 {
-			ch <- gauge(c.connectionsProto, float64(s.Stream.UDP), c.r("udp")...)
+			emit(gauge(c.connectionsProto, float64(s.Stream.UDP), c.r("udp")...))
 		}
 		if s.Stream.ICMP > 0 {
-			ch <- gauge(c.connectionsProto, float64(s.Stream.ICMP), c.r("icmp")...)
+			emit(gauge(c.connectionsProto, float64(s.Stream.ICMP), c.r("icmp")...))
 		}
 	}
 }
 
-func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceCheck, streams []v4IFaceStream) {
+func (c *Collector) collectIfaces(emit emitter, checks []v4IFaceCheck, streams []v4IFaceStream) {
 	checkMap := make(map[string]v4IFaceCheck, len(checks))
 	for _, ck := range checks {
 		checkMap[ck.Interface] = ck
@@ -501,25 +573,25 @@ func (c *Collector) collectIfaces(ch chan<- prometheus.Metric, checks []v4IFaceC
 		if chk, ok := checkMap[iface]; ok && chk.Result == "success" {
 			upVal = 1.0
 		}
-		ch <- gauge(c.ifaceUp, upVal, c.r(iface, ipAddr, comment)...)
-		ch <- counter(c.ifaceUploadTotal, float64(s.TotalUp), c.r(iface, ipAddr, comment)...)
-		ch <- counter(c.ifaceDlTotal, float64(s.TotalDown), c.r(iface, ipAddr, comment)...)
-		ch <- gauge(c.ifaceUploadSpeed, float64(s.Upload), c.r(iface, ipAddr, comment)...)
-		ch <- gauge(c.ifaceDlSpeed, float64(s.Download), c.r(iface, ipAddr, comment)...)
-		ch <- gauge(c.ifaceConns, float64(parseConnectNum(s.ConnectNum)), c.r(iface, ipAddr, comment)...)
+		emit(gauge(c.ifaceUp, upVal, c.r(iface, ipAddr, comment)...))
+		emit(counter(c.ifaceUploadTotal, float64(s.TotalUp), c.r(iface, ipAddr, comment)...))
+		emit(counter(c.ifaceDlTotal, float64(s.TotalDown), c.r(iface, ipAddr, comment)...))
+		emit(gauge(c.ifaceUploadSpeed, float64(s.Upload), c.r(iface, ipAddr, comment)...))
+		emit(gauge(c.ifaceDlSpeed, float64(s.Download), c.r(iface, ipAddr, comment)...))
+		emit(gauge(c.ifaceConns, float64(parseConnectNum(s.ConnectNum)), c.r(iface, ipAddr, comment)...))
 	}
 }
 
-func (c *Collector) collectClients(ch chan<- prometheus.Metric, devices []v4Client) {
-	ch <- gauge(c.devicesTotal, float64(len(devices)), c.router)
+func (c *Collector) collectClients(emit emitter, devices []v4Client) {
+	emit(gauge(c.devicesTotal, float64(len(devices)), c.router))
 	for _, d := range devices {
 		mac, ip := d.Mac, d.IPAddr
-		ch <- gauge(c.devInfo, 1, c.r(mac, d.Hostname, ip, d.Interface, d.Comment)...)
-		ch <- counter(c.devUpTotal, float64(d.TotalUp), c.r(mac, ip)...)
-		ch <- counter(c.devDlTotal, float64(d.TotalDown), c.r(mac, ip)...)
-		ch <- gauge(c.devUpSpeed, float64(d.Upload), c.r(mac, ip)...)
-		ch <- gauge(c.devDlSpeed, float64(d.Download), c.r(mac, ip)...)
-		ch <- gauge(c.devConns, float64(d.ConnectNum), c.r(mac, ip)...)
+		emit(gauge(c.devInfo, 1, c.r(mac, d.Hostname, ip, d.Interface, d.Comment)...))
+		emit(counter(c.devUpTotal, float64(d.TotalUp), c.r(mac, ip)...))
+		emit(counter(c.devDlTotal, float64(d.TotalDown), c.r(mac, ip)...))
+		emit(gauge(c.devUpSpeed, float64(d.Upload), c.r(mac, ip)...))
+		emit(gauge(c.devDlSpeed, float64(d.Download), c.r(mac, ip)...))
+		emit(gauge(c.devConns, float64(d.ConnectNum), c.r(mac, ip)...))
 	}
 }
 
