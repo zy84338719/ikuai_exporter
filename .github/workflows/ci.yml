@@ -57,7 +57,12 @@ jobs:
       # Mirrors the Dockerfile: resolve every dependency from the module proxy
       # at the version go.mod pins, so a build that passes here is the build the
       # published image produces.
+      # Same ldflags as the Dockerfile: this build doubles as a check that
+      # the -X injection paths still resolve, so a typo in the symbol path
+      # fails here rather than silently shipping "unknown" version labels.
       - name: Build static linux binary
         run: |
-          CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /tmp/ikuai_exporter .
+          CGO_ENABLED=0 GOOS=linux go build \
+            -ldflags="-s -w -X github.com/oekit/core/version.BuildCommit=${{ github.sha }} -X github.com/oekit/core/version.BuildBranch=${{ github.ref_name }} -X github.com/oekit/core/version.BuildTime=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            -o /tmp/ikuai_exporter .
           ls -l /tmp/ikuai_exporter
