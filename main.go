@@ -20,6 +20,7 @@ import (
 
 	"github.com/oekit/bootstrap"
 	"github.com/oekit/logx"
+	oekmetrics "github.com/oekit/metrics"
 	oekerrors "github.com/oekit/pkg/errors"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -103,12 +104,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(collector)
+	// One registry for the whole process: the exporter's own collector, the
+	// go/process collectors, the build-info gauges and (from Task 5) the
+	// httpx request/resilience metrics all land on oekit/metrics.Registry,
+	// and /metrics gathers exactly that one. A second private registry would
+	// split the scrape surface in two.
+	oekmetrics.Init(cfg.Namespace)
+	if err := oekmetrics.Registry.Register(collector); err != nil {
+		logx.Error("register collector", "err", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           newMux(registry, collector, cfg.MetricsPath),
+		Handler:           newMux(oekmetrics.Registry, collector, cfg.MetricsPath),
 		ReadHeaderTimeout: readHeaderTimeout,
 		// net/http recovers a handler panic itself and writes it through
 		// ErrorLog — defaulting to plain text on stderr. Routing that into
@@ -162,10 +171,10 @@ func main() {
 // newMux wires the scrape endpoint and the kubelet probes. A dedicated mux is
 // used rather than http.DefaultServeMux so the catch-all "/" cannot shadow a
 // probe path added later.
-func newMux(registry *prometheus.Registry, collector *metrics.Collector, metricsPath string) http.Handler {
+func newMux(gatherer prometheus.Gatherer, collector *metrics.Collector, metricsPath string) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.Handle(metricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+	mux.Handle(metricsPath, promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{
 		EnableOpenMetrics: false,
 	}))
 
