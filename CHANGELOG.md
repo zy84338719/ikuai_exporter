@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.2.2
+
+### Fixed
+
+- **`ikuai_interface_up` 的语义写清楚了**：这个指标反映的是 iKuai 的**线路检测**
+  （`/monitoring/interfaces-status` 的 `iface_check`）结果，不是物理链路状态。
+  iKuai 只对 WAN 线路做检测——真机上 `iface_check` 只有 wan1 一条，而 `iface_stream`
+  还列着 LAN 接口——所以**所有 LAN 接口的 `interface_up` 恒为 0**，哪怕它正在跑流量。
+  原来的指标 help 与 README 表格都写成「接口链路状态（1=正常）」，容易被当成 LAN 链路
+  告警而误报。help 与 README 改为如实描述，并补一条测试把这个语义钉住。
+
 ## v1.2.1
 
 ### Fixed
