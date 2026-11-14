@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.2.0
+
+ikuai-api 跟进到 v1.3.4，oekit 升到 httpx v0.12.0 / metrics v0.4.0 /
+core v0.15.3 / concurrency v0.36.1 / bootstrap v0.7.11 / logx v0.11.0 /
+pkg v0.48.0，go 指令抬到 1.26.0。四个新能力：配置管线、单一 metrics registry、
+传输层熔断、并行采集。
+
+### Added
+
+- **配置管线**（`oekit/core/config`）：新增 `-config <path>`（YAML 配置文件）与
+  `IKUAI_` 前缀的环境变量。优先级恒为 **显式 flag > env > 配置文件 > 内置缺省**；
+  内置缺省只有一处来源（代码里的 `default:` tag），flag 的默认值也从它渲染。
+  配置文件的未知键直接拒载并报出该层合法键清单与近似拼写建议——拼错的键被静默
+  忽略会让配置「看着生效、其实没生效」。缺配置时一次列全所有问题（原来只报第一个），
+  退出码仍是 2。
+
+- **传输层熔断**（`oekit/httpx`）：路由器外呼改走 httpx 的 net/http 桥接层。
+  连续失败 `-breaker-failures` 次（默认 3）后熔断打开，请求立即失败，不再被挂死的
+  路由器拖满 15s 采集超时；冷却 `-breaker-cooldown`（默认 30s）后半开，放一个探测
+  请求。熔断的状态迁移与拒绝计数出现在 `/metrics`。
+
+### Changed
+
+- **`/metrics` 改为单一 registry**（`oekit/metrics.Registry`）：exporter 指标、
+  go/process collector、`app_build_info` / `app_start_time_seconds` 与传输层的请求/
+  弹性指标族在同一面。此前 exporter 自建 registry，go/process 与 build info 永远
+  不会出现在抓取面上。
+
+- **三路并行采集**：`/monitoring/system`、`/monitoring/interfaces-status` 与分页的
+  `/monitoring/clients-online` 并行发起，一次 scrape 的开销是三路里最慢的一路而不是
+  三路之和。`up` 的语义不变（只由 system 路决定）。
+
+- **`-insecure` 的语义落点移到传输层**：`ikuaiapi.WithInsecureSkipVerify` 做的是
+  `*http.Transport` 的类型断言，transport 被换掉后它静默失效；skip-verify 改由传输层
+  承担，并且**无条件**装 TLS 配置——hertz 的 `WithTLSConfig` 会把拨号器换成 standard，
+  缺省拨号器（netpoll）不支持 TLS，不装配置时 HTTPS 目标在 Docker（linux）里会直接
+  报 `not support tls`。
+
+### Dependencies
+
+- `oekit/httpx` v0.12.0（新增）、`oekit/metrics` v0.4.0（新增）、
+  `oekit/core` v0.15.3、`oekit/concurrency` v0.36.1、`oekit/bootstrap` v0.7.11、
+  `oekit/logx` v0.11.0、`oekit/pkg` v0.48.0、`github.com/sony/gobreaker` v1.0.0
+  （新增）、`prometheus/client_golang` v1.25.0。
+- `ikuai-api` v1.3.3 → v1.3.4。
+- go 指令 1.24.0 → 1.26.0；Docker 构建镜像 `golang:1.24-alpine` →
+  `golang:1.26-alpine`。CI 走 `go-version-file: go.mod` 自动跟随。
+
 ## v1.1.5
 
 oekit 全模块跟进到 2026-11-07 的最新一批发布，ikuai-api 跟进到 v1.3.2。

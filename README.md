@@ -10,6 +10,62 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 
 所有指标都带 `router` 标签（值来自 `-router-label`，默认取 `-router` 的 host），便于单实例区分多台路由器。
 
+## 配置
+
+优先级：**显式 flag > 环境变量 > 配置文件 > 内置缺省**。内置缺省只有一处来源（代码里的 `default:` 标签），
+flag 的默认值也从它渲染——两处缺省不会各自漂移。
+
+| 层 | 载体 | 说明 |
+|----|------|------|
+| 1 | 显式 flag | 命令行里**写了**才算（只有被设置过的 flag 才覆盖其它层） |
+| 2 | 环境变量 | `IKUAI_` 前缀，见下表 |
+| 3 | 配置文件 | `-config /etc/ikuai/config.yaml`，YAML |
+| 4 | 内置缺省 | 代码里的 `default:` 标签 |
+
+### 环境变量
+
+| 变量 | 对应 flag | 说明 |
+|------|-----------|------|
+| `IKUAI_ROUTER` | `-router` | 路由器地址（自动转 HTTPS） |
+| `IKUAI_TOKEN` | `-token` | 个人 API 令牌（必填） |
+| `IKUAI_USERNAME` | `-username` | 已废弃（v4-only SDK 不支持账号密码登录） |
+| `IKUAI_PASSWORD` | `-password` | 已废弃（同上） |
+| `IKUAI_ROUTER_LABEL` | `-router-label` | 指标的 `router` 标签值 |
+| `IKUAI_LISTEN` | `-listen` | 监听地址 |
+| `IKUAI_METRICS_PATH` | `-path` | Metrics 路径 |
+| `IKUAI_NAMESPACE` | `-namespace` | 指标前缀 |
+| `IKUAI_SHUTDOWN_TIMEOUT` | `-shutdown-timeout` | 优雅关停窗口 |
+| `IKUAI_INSECURE` | `-insecure` | 跳过 TLS 证书验证 |
+| `IKUAI_BREAKER_FAILURES` | `-breaker-failures` | 连续失败多少次触发熔断 |
+| `IKUAI_BREAKER_COOLDOWN` | `-breaker-cooldown` | 熔断冷却时长 |
+
+环境变量要**非空**才生效：`IKUAI_INSECURE=false` 这类显式零值有效，空串视同未设置。
+
+### 配置文件
+
+```yaml
+# /etc/ikuai/config.yaml
+router: https://10.10.30.254
+token: <your-api-token>
+router_label: office
+listen: ":9100"
+breaker_failures: 3
+breaker_cooldown: 30s
+```
+
+```bash
+ikuai_exporter -config /etc/ikuai/config.yaml
+```
+
+配置文件的键就是上面的 YAML 键；**未知键直接拒载**，并报出该层的合法键清单与近似拼写建议——
+拼错的键被静默忽略会让配置「看着生效、其实没生效」。文件里没写的键回落到环境变量 → 内置缺省。
+
+`-config` 的路径**只认命令行**（不读环境变量）——「找配置文件」这一步本身不该再依赖环境。
+
+缺配置时（没令牌等）一次列全所有问题，退出码 2。
+
+---
+
 ## 支持的 Metrics
 
 所有指标均含 `router` 标签（下表省略）。
@@ -42,6 +98,34 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 | `ikuai_device_download_speed_bytes{mac,ip_addr}` | Gauge | 设备实时下载速率（bytes/s） |
 | `ikuai_device_connections{mac,ip_addr}` | Gauge | 设备活跃连接数 |
 
+## 熔断与弹性指标
+
+路由器外呼走 `oekit/httpx` 的传输层，熔断挂在传输层上：
+
+- 连续失败 `-breaker-failures` 次（默认 3）后熔断打开，后续请求**立即失败**
+  （`ErrCircuitOpen`），不再等路由器的超时——scrape 因此不会被挂死的路由器拖满 15s
+  采集超时，`ikuai_up` 快速变 0。
+- 熔断打开 `-breaker-cooldown`（默认 30s）后半开，只放一个探测请求；探测成功即回到
+  闭态。中间成功一次会清零连续失败计数，不会误跳闸。
+- 5xx 计入熔断失败统计（但不外抛），4xx 不算失败。
+- 熔断打开后 ikuai-api 自带的重试引擎仍会退避重试（httpx 侧不重复开重试），实测
+  一次 scrape 在 0.7s 量级失败——远小于 15s 采集超时。
+
+传输层同时暴露这些指标（`<ns>` 与 `-namespace` 一致）：
+
+| Metric | 类型 | 说明 |
+|--------|------|------|
+| `<ns>_requests_total{service,target,method,status_code}` | Counter | 外呼请求数 |
+| `<ns>_request_duration_seconds{service,target,method}` | Histogram | 外呼时延 |
+| `<ns>_requests_in_flight{service,target,method}` | Gauge | 在途请求数 |
+| `<ns>_breaker_state{service,kind}` | Gauge | 熔断状态（0=closed / 1=half_open / 2=open） |
+| `<ns>_breaker_transitions_total{service,kind,from,to}` | Counter | 熔断状态迁移次数 |
+| `<ns>_breaker_rejected_total{service,kind}` | Counter | 熔断拒绝次数 |
+
+`/metrics` 只有一个 registry：exporter 自己的指标、go/process collector、
+`app_build_info` / `app_start_time_seconds` 与上表的传输层指标都在同一面。
+
+---
 ## 参数说明
 
 | 参数 | 默认值 | 说明 |
@@ -53,7 +137,10 @@ iKuai 路由器 Prometheus Exporter，基于 [ikuai-api](https://github.com/zy84
 | `-path` | `/metrics` | Metrics 路径 |
 | `-namespace` | `ikuai` | Prometheus 指标前缀 |
 | `-shutdown-timeout` | `15s` | SIGINT/SIGTERM 时等待在途 scrape 的优雅关停窗口 |
-| `-insecure` | `true` | 跳过 TLS 证书验证 |
+| `-insecure` | `true` | 跳过 TLS 证书验证（由传输层承担，见「熔断与弹性指标」） |
+| `-breaker-failures` | `3` | 连续失败多少次触发熔断 |
+| `-breaker-cooldown` | `30s` | 熔断冷却时长（到期后半开，放一个探测请求） |
+| `-config` | `""` | YAML 配置文件路径（只认命令行） |
 
 ### HTTP 端点
 
@@ -183,7 +270,7 @@ GOWORK=off go test ./...
 若 `go.work` 丢失，重建即可：
 
 ```bash
-printf 'go 1.24.0\n\nuse (\n\t.\n\t../ikuai-api\n)\n' > go.work
+printf 'go 1.26.0\n\nuse (\n\t.\n\t../ikuai-api\n)\n' > go.work
 ```
 
 ### 工程规范
@@ -194,6 +281,9 @@ printf 'go 1.24.0\n\nuse (\n\t.\n\t../ikuai-api\n)\n' > go.work
   内嵌的 ikuai-api 通过 `logx.Delegating` 懒解析，会自动跟随同一后端。
 - **错误**统一用 `oekit/pkg/errors` 包装，保留错误链以便 `AsBizError` 提取 iKuai 业务码。
 - **生命周期**由 `oekit/bootstrap` 编排（信号监听、资源逆序关闭、优雅关停）。
+- **配置**由 `oekit/core/config` 装配（`default:`/`env:` tag、严格模式、汇总报错）。
+- **传输层**用 `oekit/httpx`（熔断、请求指标、TLS 策略单源）。
+- **指标**统一注册到 `oekit/metrics.Registry`，`/metrics` 只 gather 这一个。
 - **并发**使用 `oekit/concurrency/async` 的 GoSafe 系列，不写裸 `go func`。
 
 > 依赖版本一律由 `go.mod` 锁定为已发布的 ikuai-api；本地联调用不入库的 `go.work`，
