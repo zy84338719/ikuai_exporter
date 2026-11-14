@@ -140,6 +140,63 @@ func TestLoadConfig_DeprecatedCredentials(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_RangeValidatedAfterOverrides 区间校验必须发生在 env / flag
+// 覆写之后。
+//
+// core/config 的 LoadFile 内建 tag 接线会在解码文件后立刻 ValidateTags——
+// 那一刻 env 与显式 flag 还没参与覆写，于是「基线配置文件 + env/flag 覆盖」
+// 这条 12-factor 主线会被文件里的旧值当场毙掉（文件写 breaker_failures: 0、
+// env 给 5 ⇒ 仍然 exit 2），且报错指向文件、把运维引到错误的方向。
+func TestLoadConfig_RangeValidatedAfterOverrides(t *testing.T) {
+	path := writeConfigFile(t, "router: https://10.0.0.1\n"+
+		"token: file-token\n"+
+		"breaker_failures: 0\n"+
+		"breaker_cooldown: 0s\n")
+
+	t.Run("env overrides an out-of-range file value", func(t *testing.T) {
+		t.Setenv("IKUAI_BREAKER_FAILURES", "5")
+		t.Setenv("IKUAI_BREAKER_COOLDOWN", "30s")
+		cfg, err := loadConfig([]string{"-config", path}, os.Stderr)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.BreakerFailures != 5 {
+			t.Errorf("breaker failures = %d, want 5", cfg.BreakerFailures)
+		}
+		if cfg.BreakerCooldown != 30*time.Second {
+			t.Errorf("breaker cooldown = %s, want 30s", cfg.BreakerCooldown)
+		}
+	})
+
+	t.Run("flag overrides an out-of-range file value", func(t *testing.T) {
+		cfg, err := loadConfig([]string{"-config", path, "-breaker-failures", "5", "-breaker-cooldown", "30s"}, os.Stderr)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.BreakerFailures != 5 {
+			t.Errorf("breaker failures = %d, want 5", cfg.BreakerFailures)
+		}
+		if cfg.BreakerCooldown != 30*time.Second {
+			t.Errorf("breaker cooldown = %s, want 30s", cfg.BreakerCooldown)
+		}
+	})
+
+	t.Run("without an override the file value is still rejected", func(t *testing.T) {
+		_, err := loadConfig([]string{"-config", path}, os.Stderr)
+		if err == nil {
+			t.Fatal("want error for the out-of-range file value")
+		}
+		var ce *ConfigError
+		if !errors.As(err, &ce) {
+			t.Fatalf("want *ConfigError, got %T", err)
+		}
+		joined := strings.Join(ce.Problems, "|")
+		if !strings.Contains(joined, "breaker_failures") || !strings.Contains(joined, "breaker_cooldown") {
+			t.Errorf("problems = %v, want both breaker ranges mentioned", ce.Problems)
+		}
+	})
+}
+
 // TestLoadConfig_UnknownKeyRejected 配置文件里的未知键直接拒载——拼错的键
 // 静默忽略会让配置「看着生效、其实没生效」。
 func TestLoadConfig_UnknownKeyRejected(t *testing.T) {

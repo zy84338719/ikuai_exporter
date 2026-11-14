@@ -21,7 +21,20 @@ pkg v0.48.0，go 指令抬到 1.26.0。四个新能力：配置管线、单一 m
   路由器拖满 15s 采集超时；冷却 `-breaker-cooldown`（默认 30s）后半开，放一个探测
   请求。熔断的状态迁移与拒绝计数出现在 `/metrics`。
 
+### Fixed
+
+- **区间校验改在最终值上做**（原实现会让「基线配置文件 + env/flag 覆盖」当场失效）：
+  `core/config` 的 `LoadFile` 内建 tag 接线在解码文件后立刻跑 `ValidateTags`——那一刻
+  env 与显式 flag 还没参与覆写，于是文件里一个不合法的旧值（`breaker_failures: 0`
+  这种很自然的占位）会让进程在启动阶段直接 exit 2，env 与 flag 都救不回来，且报错
+  指向文件、把运维引到错误的方向。两个熔断字段的区间改为在 env/flag 覆写之后
+  显式校验，并与其余配置问题一起汇总。
+
 ### Changed
+
+- **`ikuai_up` 的 help 文案改为如实描述**：并行采集下 `up` 由 system 端点决定，
+  该端点失败时另两路仍会照常输出（此前是整个采集提前返回），所以文案从
+  「路由器是否可达」改为「system 端点是否应答」。
 
 - **`/metrics` 改为单一 registry**（`oekit/metrics.Registry`）：exporter 指标、
   go/process collector、`app_build_info` / `app_start_time_seconds` 与传输层的请求/

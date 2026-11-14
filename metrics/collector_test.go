@@ -517,9 +517,9 @@ func TestCollectRunsLanesInParallel(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/monitoring/system"):
 			_, _ = w.Write([]byte(systemOK))
 		case strings.HasSuffix(r.URL.Path, "/monitoring/interfaces-status"):
-			_, _ = w.Write([]byte(`{"code":0,"results":{"iface_check":[],"iface_stream":[]}}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"iface_check":[{"interface":"wan1","result":"success"}],"iface_stream":[{"interface":"wan1","ip_addr":"1.2.3.4","comment":"","total_up":10,"total_down":20,"upload":1,"download":2,"connect_num":"3"}]}}`))
 		case strings.HasSuffix(r.URL.Path, "/monitoring/clients-online"):
-			_, _ = w.Write([]byte(`{"code":0,"results":{"data":[]}}`))
+			_, _ = w.Write([]byte(`{"code":0,"results":{"data":[{"mac":"aa:bb:cc:dd:ee:ff","hostname":"pc","ip_addr":"192.168.1.10","interface":"lan1","comment":"","total_up":1,"total_down":2,"upload":0,"download":0,"connect_num":0}]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"code":0,"results":{"data":null}}`))
 		}
@@ -529,12 +529,31 @@ func TestCollectRunsLanesInParallel(t *testing.T) {
 	c := NewCollector("ikuai", "slow-router", newTestClient(t, srv))
 
 	start := time.Now()
-	collectValues(t, c)
+	values := collectValues(t, c)
 	elapsed := time.Since(start)
 
 	// Serial would be 3×250ms; parallel is one lane's 250ms.
 	if elapsed >= 600*time.Millisecond {
 		t.Errorf("scrape took %s, want well under 3×%s — the lanes do not run in parallel", elapsed, delay)
+	}
+
+	// 每一路都要有各自的指标——并行不能只看耗时：某一路被漏掉的话耗时照样
+	// 达标，只有指标面能抓住。
+	for _, want := range []string{
+		"ikuai_uptime_seconds",       // system 路
+		"ikuai_interface_up",         // interfaces 路
+		"ikuai_devices_online_total", // clients 路
+	} {
+		found := false
+		for desc := range values {
+			if strings.Contains(desc, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("metric %s was not emitted — its lane did not run", want)
+		}
 	}
 }
 

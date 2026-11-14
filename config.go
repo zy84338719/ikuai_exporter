@@ -31,9 +31,22 @@ type Config struct {
 	Namespace       string        `yaml:"namespace"        default:"ikuai"          env:"IKUAI_NAMESPACE"`
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout" default:"15s"            env:"IKUAI_SHUTDOWN_TIMEOUT"`
 	Insecure        bool          `yaml:"insecure"         default:"true"           env:"IKUAI_INSECURE"`
-	BreakerFailures uint          `yaml:"breaker_failures" default:"3"   range:"[1,100]" env:"IKUAI_BREAKER_FAILURES"`
-	BreakerCooldown time.Duration `yaml:"breaker_cooldown" default:"30s" range:"(0,10m]" env:"IKUAI_BREAKER_COOLDOWN"`
+	BreakerFailures uint          `yaml:"breaker_failures" default:"3"   env:"IKUAI_BREAKER_FAILURES"`
+	BreakerCooldown time.Duration `yaml:"breaker_cooldown" default:"30s" env:"IKUAI_BREAKER_COOLDOWN"`
 }
+
+// 熔断参数的合法区间。
+//
+// 这两个区间**不用 range tag** 表达：core/config 的 LoadFile 内建 tag 接线会在
+// 解码文件后立刻跑 ValidateTags——那一刻 env 与显式 flag 还没参与覆写，于是
+// 「基线配置文件 + env/flag 覆盖」这条 12-factor 主线会被文件里的旧值当场毙掉
+// （文件写 breaker_failures: 0、env 给 5 ⇒ 仍然 exit 2）。区间改为在最终值上
+// 显式校验，与其它配置问题一起汇总。
+const (
+	minBreakerFailures = 1
+	maxBreakerFailures = 100
+	maxBreakerCooldown = 10 * time.Minute
+)
 
 // ConfigError 是配置问题的汇总错误：一次列全所有问题，而不是只报第一个。
 //
@@ -44,7 +57,7 @@ type ConfigError struct {
 }
 
 func (e *ConfigError) Error() string {
-	return "配置不完整 / configuration incomplete:\n  - " + strings.Join(e.Problems, "\n  - ")
+	return "配置有问题 / configuration problems:\n  - " + strings.Join(e.Problems, "\n  - ")
 }
 
 // validate 汇总所有配置问题。
@@ -64,6 +77,16 @@ func (c *Config) validate() error {
 	}
 	if c.Router == "" {
 		problems = append(problems, "router: 缺失 / missing")
+	}
+	if c.BreakerFailures < minBreakerFailures || c.BreakerFailures > maxBreakerFailures {
+		problems = append(problems, fmt.Sprintf(
+			"breaker_failures: %d 不在 [%d,%d] 范围内 / out of range",
+			c.BreakerFailures, minBreakerFailures, maxBreakerFailures))
+	}
+	if c.BreakerCooldown <= 0 || c.BreakerCooldown > maxBreakerCooldown {
+		problems = append(problems, fmt.Sprintf(
+			"breaker_cooldown: %s 不在 (0,%s] 范围内 / out of range",
+			c.BreakerCooldown, maxBreakerCooldown))
 	}
 	if len(problems) == 0 {
 		return nil
@@ -105,7 +128,7 @@ type flagTargets struct {
 //
 // d 是带 default tag 装配出来的缺省值，只用于渲染 flag 的缺省文案。
 func (t *flagTargets) register(fs *flag.FlagSet, d Config) map[string]func(*Config) {
-	fs.StringVar(&t.router, "router", "", "iKuai router address (v4 REST API, HTTPS)")
+	fs.StringVar(&t.router, "router", "", fmt.Sprintf("iKuai router address (v4 REST API, HTTPS) (default %q)", d.Router))
 	fs.StringVar(&t.token, "token", "", "Personal API token for the v4 REST API (required; generate it in 系统设置 → 个人令牌)")
 	fs.StringVar(&t.username, "username", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
 	fs.StringVar(&t.password, "password", "", "(deprecated) v4-only SDK no longer supports username/password login; use -token")
@@ -114,7 +137,7 @@ func (t *flagTargets) register(fs *flag.FlagSet, d Config) map[string]func(*Conf
 	fs.StringVar(&t.metricsPath, "path", "", fmt.Sprintf("Metrics path (default %q)", d.MetricsPath))
 	fs.StringVar(&t.namespace, "namespace", "", fmt.Sprintf("Prometheus metrics namespace (default %q)", d.Namespace))
 	fs.DurationVar(&t.shutdownTimeout, "shutdown-timeout", 0, fmt.Sprintf("Grace period for in-flight scrapes on SIGINT/SIGTERM (default %s)", d.ShutdownTimeout))
-	fs.BoolVar(&t.insecure, "insecure", false, "Skip TLS certificate verification (default true)")
+	fs.BoolVar(&t.insecure, "insecure", false, fmt.Sprintf("Skip TLS certificate verification (default %v)", d.Insecure))
 	fs.UintVar(&t.breakerFailures, "breaker-failures", 0, fmt.Sprintf("Consecutive router failures that trip the circuit breaker (default %d)", d.BreakerFailures))
 	fs.DurationVar(&t.breakerCooldown, "breaker-cooldown", 0, fmt.Sprintf("Cooldown before the circuit breaker half-opens (default %s)", d.BreakerCooldown))
 	fs.StringVar(&t.configPath, "config", "", "Path to a YAML config file (env and explicit flags override its values)")

@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	oekmetrics "github.com/oekit/metrics"
+
+	ikuaiapi "github.com/zy84338719/ikuai-api"
+	"github.com/zy84338719/ikuai_exporter/metrics"
 )
 
 // TestMetricsSingleRegistry 锁住「单源 registry」这个属性：
@@ -36,8 +39,13 @@ func TestMetricsSingleRegistry(t *testing.T) {
 		}
 	}
 
-	// 抓取面本身也要能看到它们。
-	mux := newMux(oekmetrics.Registry, nil, "/metrics")
+	// 抓取面本身也要能看到它们。collector 传真实实例（/ready 闭包会用到它，
+	// 传 nil 的话将来一旦在该测试里请求 /ready 就是 nil 解引用）。
+	client, err := ikuaiapi.NewClient("https://127.0.0.1:1", ikuaiapi.WithToken("t"))
+	if err != nil {
+		t.Fatalf("new ikuai client: %v", err)
+	}
+	mux := newMux(oekmetrics.Registry, metrics.NewCollector("ikuai", "r", client), "/metrics")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	if rec.Code != 200 {

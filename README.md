@@ -60,9 +60,13 @@ ikuai_exporter -config /etc/ikuai/config.yaml
 配置文件的键就是上面的 YAML 键；**未知键直接拒载**，并报出该层的合法键清单与近似拼写建议——
 拼错的键被静默忽略会让配置「看着生效、其实没生效」。文件里没写的键回落到环境变量 → 内置缺省。
 
+区间校验（如熔断阈值、冷却时长）发生在**最终值**上——即 env 与显式 flag 覆写之后。
+所以基线文件里写 `breaker_failures: 0`（占位）再由 env 给 `IKUAI_BREAKER_FAILURES=5`
+覆盖是可行的；没有覆盖时它才会作为一条问题被列出来。
+
 `-config` 的路径**只认命令行**（不读环境变量）——「找配置文件」这一步本身不该再依赖环境。
 
-缺配置时（没令牌等）一次列全所有问题，退出码 2。
+缺配置时（没令牌等）与非法值（越界等）一次列全所有问题，退出码 2。
 
 ---
 
@@ -72,7 +76,7 @@ ikuai_exporter -config /etc/ikuai/config.yaml
 
 | Metric | 类型 | 说明 |
 |--------|------|------|
-| `ikuai_up` | Gauge | 路由器是否可达（1=正常，0=故障） |
+| `ikuai_up` | Gauge | system 端点（`/monitoring/system`）是否应答（1=正常，0=失败） |
 | `ikuai_uptime_seconds` | Gauge | 路由器运行时长（秒） |
 | `ikuai_version_info{version,arch,ver_string,model_name}` | Gauge | 固件版本信息 |
 | `ikuai_cpu_usage_ratio{core}` | Gauge | 各核 CPU 使用率（0–1） |

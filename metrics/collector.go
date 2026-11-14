@@ -246,7 +246,7 @@ func NewCollector(ns, router string, client *ikuaiapi.Client) *Collector {
 		client:     client,
 		monitoring: api.Monitoring(),
 
-		up:      lblN("up", "1 if the router is reachable, 0 otherwise"),
+		up:      lblN("up", "1 if the router's /monitoring/system endpoint responded successfully, 0 otherwise"),
 		uptime:  lblN("uptime_seconds", "Router uptime in seconds"),
 		version: lbl("version_info", "Router version info (always 1)", "version", "arch", "ver_string", "model_name"),
 
