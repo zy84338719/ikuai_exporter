@@ -74,19 +74,31 @@ func main() {
 	// passed an http:// address.
 	httpsAddr := metrics.ToHTTPS(cfg.Router)
 
-	client, err := ikuaiapi.NewClient(httpsAddr,
-		ikuaiapi.WithToken(cfg.Token),
-		ikuaiapi.WithInsecureSkipVerify(cfg.Insecure),
-	)
-	if err != nil {
-		logx.Error("create ikuai client", "addr", httpsAddr, "err", err)
-		os.Exit(1)
-	}
-
 	// Default the router label to the host portion of the address.
 	routerLabel := cfg.RouterLabel
 	if routerLabel == "" {
 		routerLabel = hostOf(httpsAddr)
+	}
+
+	// The SDK talks to the router through the httpx bridge: the circuit
+	// breaker, the request metrics and the TLS policy all live in the
+	// transport. ikuaiapi.WithInsecureSkipVerify is deliberately NOT used —
+	// it type-asserts *http.Transport, so with a replaced transport it
+	// fails silently; skip-verify is carried by httpx.WithTLSSkipVerify.
+	rt, err := newRouterTransport(cfg, routerLabel)
+	if err != nil {
+		logx.Error("create router transport", "err", err)
+		os.Exit(1)
+	}
+
+	client, err := ikuaiapi.NewClient(httpsAddr,
+		ikuaiapi.WithToken(cfg.Token),
+		ikuaiapi.WithHTTPClient(&http.Client{Transport: rt}),
+	)
+	if err != nil {
+		logx.Error("create ikuai client", "addr", httpsAddr, "err", err)
+		closeTransport(rt)
+		os.Exit(1)
 	}
 
 	collector := metrics.NewCollector(cfg.Namespace, routerLabel, client)
@@ -127,6 +139,14 @@ func main() {
 	}
 
 	if err := b.Run(func(app *bootstrap.App) error {
+		// Registration order is the reverse of the close order: the
+		// transport is registered first so it is closed last — no scrape
+		// can outlive the transport it is using, and the client is closed
+		// before the transport it rides on.
+		app.AddResource("router-transport", func(context.Context) error {
+			closeTransport(rt)
+			return nil
+		})
 		app.AddResource("ikuai-api-client", func(ctx context.Context) error {
 			if cerr := client.Close(ctx); cerr != nil {
 				return oekerrors.Wrap(cerr, "close ikuai client")
