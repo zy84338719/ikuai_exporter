@@ -19,6 +19,9 @@ services:
       - -token=YOUR_API_TOKEN              # 个人令牌：系统设置 → 个人令牌
       - -router-label=office               # 指标的 router 标签值
       - -listen=:9100
+      # 也可用环境变量或 YAML 配置文件，优先级：显式 flag > env > 配置文件。
+      #   env: IKUAI_ROUTER / IKUAI_TOKEN / IKUAI_ROUTER_LABEL / IKUAI_LISTEN …
+      #   文件：挂载后加 -config=/etc/ikuai/config.yaml
 
   # ── 第二台路由器（复制并改地址/端口/标签）────────────────────────────────
   # ikuai-exporter-home:

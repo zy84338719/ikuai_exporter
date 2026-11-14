@@ -25,6 +25,8 @@ spec:
           imagePullPolicy: Always
 
           # ── v4 令牌模式（推荐）─────────────────────────────────────────────
+          # 显式 flag 优先级最高；也可用 env（IKUAI_ROUTER / IKUAI_TOKEN / …）或
+          # 挂载 YAML 配置文件后加 -config=/etc/ikuai/config.yaml。
           args:
             - -router=$(ROUTER_ADDR)
             - -token=$(ROUTER_TOKEN)
