@@ -30,7 +30,9 @@ pkg v0.48.0，go 指令抬到 1.26.0。四个新能力：配置管线、单一 m
 
 - **三路并行采集**：`/monitoring/system`、`/monitoring/interfaces-status` 与分页的
   `/monitoring/clients-online` 并行发起，一次 scrape 的开销是三路里最慢的一路而不是
-  三路之和。`up` 的语义不变（只由 system 路决定）。
+  三路之和。`up` 的语义不变（只由 system 路决定）。细节变化：system 路失败时
+  其余两路仍会照常采集并输出（此前是整个采集提前返回），`up` 仍为 0；路由器整体
+  不可达时三路都失败，抓取面与此前一致（只有 `up=0`）。
 
 - **`-insecure` 的语义落点移到传输层**：`ikuaiapi.WithInsecureSkipVerify` 做的是
   `*http.Transport` 的类型断言，transport 被换掉后它静默失效；skip-verify 改由传输层
