@@ -88,7 +88,7 @@ ikuai_exporter -config /etc/ikuai/config.yaml
 | `ikuai_online_users_total` | Gauge | 在线用户总数 |
 | `ikuai_connections_total` | Gauge | 活跃连接总数 |
 | `ikuai_connections{protocol}` | Gauge | 按协议/状态的连接数（tcp/udp/icmp） |
-| `ikuai_interface_up{interface,ip_addr,comment}` | Gauge | 接口链路状态（1=正常） |
+| `ikuai_interface_up{interface,ip_addr,comment}` | Gauge | iKuai **线路检测**结果（1=检测成功）。只有 WAN 线路参与检测，**LAN 接口恒为 0**——这个 0 表示「没有成功的线路检测」，无法区分「未参与检测」与「检测失败」，**不能用来判断 LAN 链路状态** |
 | `ikuai_interface_upload_bytes_total{interface,ip_addr,comment}` | Counter | 接口累计上传字节数 |
 | `ikuai_interface_download_bytes_total{interface,ip_addr,comment}` | Counter | 接口累计下载字节数 |
 | `ikuai_interface_upload_speed_bytes{interface,ip_addr,comment}` | Gauge | 接口实时上传速率（bytes/s） |

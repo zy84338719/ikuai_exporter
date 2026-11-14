@@ -34,7 +34,9 @@ func newTestClient(t *testing.T, srv *httptest.Server) *ikuaiapi.Client {
 // assertion.
 func collect(t *testing.T, c *Collector) map[string]*dto.MetricFamily {
 	t.Helper()
-	ch := make(chan *prometheus.Desc, 1)
+	// Describe sends every desc synchronously, so the buffer has to hold all
+	// of them: a buffer of one deadlocks on the second send.
+	ch := make(chan *prometheus.Desc, 64)
 	c.Describe(ch)
 	close(ch)
 

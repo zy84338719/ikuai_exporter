@@ -263,7 +263,7 @@ func NewCollector(ns, router string, client *ikuaiapi.Client) *Collector {
 		connections:      lblN("connections_total", "Total active connections"),
 		connectionsProto: lbl("connections", "Active connections by protocol/state", "protocol"),
 
-		ifaceUp:          lbl("interface_up", "1 if interface link check succeeded", "interface", "ip_addr", "comment"),
+		ifaceUp:          lbl("interface_up", "1 if the interface passed iKuai's line check; only WAN lines are checked, so LAN interfaces are always 0", "interface", "ip_addr", "comment"),
 		ifaceUploadTotal: lbl("interface_upload_bytes_total", "Total bytes uploaded via interface", "interface", "ip_addr", "comment"),
 		ifaceDlTotal:     lbl("interface_download_bytes_total", "Total bytes downloaded via interface", "interface", "ip_addr", "comment"),
 		ifaceUploadSpeed: lbl("interface_upload_speed_bytes", "Current upload speed in bytes/s", "interface", "ip_addr", "comment"),
@@ -569,6 +569,13 @@ func (c *Collector) collectIfaces(emit emitter, checks []v4IFaceCheck, streams [
 			comment = iface
 		}
 
+		// upVal mirrors iKuai's line check (iface_check), not the physical
+		// link state. A real router only runs line checks on WAN lines: its
+		// iface_check array holds wan1 alone while iface_stream lists the
+		// LAN interfaces too — so every LAN interface is exported with 0
+		// even while it is carrying traffic. That 0 means "no successful
+		// line check", and the two cases behind it (never checked / check
+		// failed) are not distinguishable from this response.
 		upVal := 0.0
 		if chk, ok := checkMap[iface]; ok && chk.Result == "success" {
 			upVal = 1.0
